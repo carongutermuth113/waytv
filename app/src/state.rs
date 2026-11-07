@@ -47,6 +47,7 @@ pub enum RowKind {
     RestartAndroid,
     CheckUpdates,
     UpdateAll,
+    UpdateApp,
     ShowJob,
     Reboot,
     /// Apps to install (from /data/apps/*)
@@ -258,6 +259,9 @@ impl AppState {
                 if self.status.as_ref().and_then(|s| s.job.as_ref()).is_some() {
                     v.insert(0, RowKind::ShowJob);
                 }
+                if self.status.as_ref().and_then(|s| s.app_update.as_ref()).is_some() {
+                    v.insert(0, RowKind::UpdateApp);
+                }
                 v
             }
             Section::System => vec![RowKind::Reboot],
@@ -345,6 +349,14 @@ impl AppState {
                     String::new()
                 },
             ),
+            RowKind::UpdateApp => {
+                let tag = st.app_update.as_ref()
+                    .and_then(|u| u.get("tag"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("unknown");
+                let cur = st.app_version.map(|v| v.to_string()).unwrap_or_else(|| "1".into());
+                ("Update WayTV app".into(), format!("v{} → {}", cur, tag))
+            }
             RowKind::ShowJob => (
                 "Show running task".into(),
                 st.job.as_ref().map(|j| j.title()).unwrap_or_default(),
@@ -903,6 +915,22 @@ impl AppState {
                 "Update",
                 ApiReq::UpdateRun,
             ),
+            RowKind::UpdateApp => {
+                let url = st.app_update.as_ref()
+                    .and_then(|u| u.get("url"))
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("");
+                if url.is_empty() {
+                    self.set_banner("App update info not available", true);
+                    return vec![];
+                }
+                self.confirm(
+                    "Update the WayTV Settings app?",
+                    "Downloads and installs the latest version. Android may restart.",
+                    "Update",
+                    ApiReq::InstallApp("waytv-settings".into()), // Will use URL from agent
+                )
+            }
             RowKind::ShowJob => {
                 if let Some(job) = st.job.clone() {
                     self.modals.push(Modal::Job { job });

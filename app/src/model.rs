@@ -68,6 +68,11 @@ pub struct Status {
     /// Available apps to install from /data/apps/*.
     #[serde(deserialize_with = "lenient")]
     pub apps: Vec<AppMetadata>,
+    /// Installed WayTV Settings app version code (API v2+).
+    #[serde(deserialize_with = "lenient")]
+    pub app_version: Option<i64>,
+    /// Latest WayTV Settings app available on GitHub (API v2+): {tag, url}.
+    pub app_update: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]

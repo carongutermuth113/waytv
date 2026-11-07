@@ -307,6 +307,32 @@ def extract_apk_package(apk_path):
     return None
 
 
+def get_app_version():
+    """Get installed WayTV Settings app version code."""
+    if not android_up():
+        return None
+    out = android("/system/bin/dumpsys", "package", "tv.waytv.settings")
+    m = re.search(r"versionCode=(\d+)", out)
+    return int(m.group(1)) if m else None
+
+
+def get_latest_app_version():
+    """Fetch latest app version from GitHub releases."""
+    try:
+        rc, out = run(["curl", "-s", "https://api.github.com/repos/carongutermuth113/waytv/releases/latest"], 10)
+        if rc == 0:
+            data = json.loads(out)
+            tag = data.get("tag_name", "")
+            if tag.startswith("app-v"):
+                # Extract version code from tag name (e.g., app-v1.5 -> 1.5, but we need integer)
+                # For now, assume tag format is app-vX where X maps to version code
+                # Simpler: just check if there's a newer tag by comparing GitHub release date
+                return {"tag": tag, "url": data.get("assets", [{}])[0].get("browser_download_url", "")}
+    except Exception:
+        pass
+    return None
+
+
 def status():
     conf = read_env(DISPLAY_CONF)
     w, h = int(conf.get("WIDTH", 1920)), int(conf.get("HEIGHT", 1080))
@@ -377,6 +403,8 @@ def status():
                     "reboot_needed": chk.get("REBOOT") == "1" if chk else None,
                     "checked_at": checked},
         "perf": perf, "job": running_job(), "apps": scan_apps(),
+        "app_version": get_app_version(),
+        "app_update": get_latest_app_version(),
     }
 
 
@@ -509,6 +537,27 @@ def install_app(body):
     
     # Install via pm install
     job = start_job("install", f"Installing {pkg}", f"{BIN}/waytv-apps install {apk_path}")
+    return {"ok": True, "restarting": False, "job": job}
+
+
+def update_app():
+    """Download and install the latest WayTV Settings app from GitHub."""
+    need_android()
+    latest = get_latest_app_version()
+    if not latest or not latest.get("url"):
+        raise ApiError(404, "Could not find latest app version on GitHub.")
+    
+    url = latest["url"]
+    apk_path = "/tmp/waytv-app-update.apk"
+    
+    # Download APK
+    rc, _ = run(["curl", "-s", "-L", "-o", apk_path, url], 60)
+    if rc != 0 or not os.path.exists(apk_path):
+        raise ApiError(500, "Failed to download app from GitHub.")
+    
+    # Install
+    job = start_job("app_update", f"Updating WayTV app to {latest['tag']}", 
+                   f"{BIN}/waytv-apps install {apk_path}")
     return {"ok": True, "restarting": False, "job": job}
 
 
@@ -728,6 +777,7 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/overlay": lambda: set_overlay(body),
                     "/api/timezone": lambda: set_timezone(body),
                     "/api/apps/install": lambda: install_app(body),
+                    "/api/app/update": lambda: update_app(),
                     "/api/update/check": lambda: {"ok": True, "job": start_job(
                         "check", "Check for updates", f"{BIN}/waytv-check --no-notify")},
                     "/api/update/run": lambda: {"ok": True, "job": start_job(

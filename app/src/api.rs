@@ -240,6 +240,8 @@ pub enum ApiReq {
     Apply(Changes),
     /// Install an app: package name (e.g. "com.smarttube.next").
     InstallApp(String),
+    /// Update the WayTV Settings app from GitHub.
+    UpdateApp,
     UpdateCheck,
     UpdateRun,
     RestartAndroid,
@@ -338,6 +340,11 @@ impl ApiReq {
                 "POST",
                 "/api/apps/install".into(),
                 Some(json!({"package": pkg}).to_string()),
+            ),
+            ApiReq::UpdateApp => (
+                "POST",
+                "/api/app/update".into(),
+                Some("{}".into()),
             ),
             ApiReq::SetDensity(v) => {
                 let value = v.to_json();
