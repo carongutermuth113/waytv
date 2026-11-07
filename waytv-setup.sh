@@ -2907,6 +2907,24 @@ do_install() {
         log "Checking Aurora Store"
         /usr/local/bin/waytv-apps aurora || warn "Aurora Store install failed; retry with: sudo waytv-apps aurora"
     fi
+    
+    log "Preparing optional apps for the app installer"
+    mkdir -p /data/apps
+    # SmartTube (YouTube client for Android TV)
+    if [[ ! -f /data/apps/smarttube.apk ]]; then
+        wget -q -O /data/apps/smarttube.apk.tmp https://github.com/yuliskov/SmartTubeNext/releases/download/latest/smarttube.apk 2>/dev/null \
+            && mv /data/apps/smarttube.apk.tmp /data/apps/smarttube.apk \
+            && echo "  Downloaded SmartTube" \
+            || rm -f /data/apps/smarttube.apk.tmp
+    fi
+    # Aurora Store (Google Play client)
+    if [[ ! -f /data/apps/aurorastore.apk ]]; then
+        wget -q -O /data/apps/aurorastore.apk.tmp "https://gitlab.com/api/v4/projects/aurora%2Fstore/releases" 2>/dev/null \
+            | grep -o 'https://[^"]*\.apk' | head -1 | xargs -I {} wget -q -O /data/apps/aurorastore.apk.tmp {} 2>/dev/null \
+            && mv /data/apps/aurorastore.apk.tmp /data/apps/aurorastore.apk \
+            && echo "  Downloaded Aurora Store" \
+            || rm -f /data/apps/aurorastore.apk.tmp
+    fi
 
     log "Checking the boot target"
     systemctl enable --now seatd.service
