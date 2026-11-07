@@ -15,15 +15,17 @@ pub enum Section {
     Updates,
     System,
     Apps,
+    Settings,
 }
 
 impl Section {
-    pub const ALL: [Section; 5] = [
+    pub const ALL: [Section; 6] = [
         Section::Display,
         Section::Android,
         Section::Updates,
         Section::System,
         Section::Apps,
+        Section::Settings,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -32,6 +34,7 @@ impl Section {
             Section::Updates => "Updates",
             Section::System => "System",
             Section::Apps => "Apps",
+            Section::Settings => "Settings",
         }
     }
 }
@@ -282,7 +285,7 @@ impl AppState {
             }
             Section::System => vec![RowKind::Reboot],
             Section::Apps => {
-                let mut v = vec![RowKind::UpdateAllApps, RowKind::AutoUpdateApps];
+                let mut v = vec![RowKind::UpdateAllApps];
                 v.extend(
                     self.status
                         .as_ref()
@@ -296,6 +299,7 @@ impl AppState {
                 );
                 v
             }
+            Section::Settings => vec![RowKind::AutoUpdateApps],
         }
     }
 
@@ -1439,11 +1443,14 @@ mod tests {
         s.nav(Nav::Down);
         assert_eq!(s.section_kind(), Section::System);
         s.nav(Nav::Down);
-        assert_eq!(s.section_kind(), Section::Apps, "clamped at bottom");
+        assert_eq!(s.section_kind(), Section::Apps);
+        s.nav(Nav::Down);
+        assert_eq!(s.section_kind(), Section::Settings, "clamped at bottom");
         s.nav(Nav::NextSection);
         assert_eq!(s.section_kind(), Section::Display, "R1 wraps");
         s.nav(Nav::PrevSection);
-        assert_eq!(s.section_kind(), Section::Apps, "L1 wraps");
+        assert_eq!(s.section_kind(), Section::Settings, "L1 wraps");
+        s.nav(Nav::PrevSection);
         s.nav(Nav::PrevSection);
         s.nav(Nav::PrevSection);
         s.nav(Nav::PrevSection);

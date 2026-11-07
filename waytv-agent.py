@@ -268,11 +268,11 @@ def scan_apps():
     apps_dir = "/data/apps"
     apps = []
     
-    # Icon mapping for known apps
+    # Icon mapping for known apps (emoji or UTF-8 symbols)
     app_icons = {
-        "com.smarttube.tv": "🎬",
-        "com.jqssun.browser": "🌐",
-        "com.aurora.store": "🛍️",
+        "com.smarttube.tv": "📺",  # TV icon
+        "com.jqssun.browser": "🔍",  # Magnifying glass (search)
+        "com.aurora.store": "📦",  # Package icon
     }
     
     if os.path.isdir(apps_dir):
@@ -287,10 +287,13 @@ def scan_apps():
             # Check if installed
             installed = android("/system/bin/pm", "list", "packages") and pkg in android("/system/bin/pm", "list", "packages")
             
+            # Try to get icon from installed app, otherwise use mapping
+            icon = get_app_icon(pkg) if installed else app_icons.get(pkg)
+            
             apps.append({
                 "name": fn.replace(".apk", "").replace("-", " "),
                 "package": pkg,
-                "icon": app_icons.get(pkg),
+                "icon": icon,
                 "version": "1.0",
                 "installed": bool(installed),
                 "installing": False
@@ -299,12 +302,29 @@ def scan_apps():
     # Demo apps if directory is empty or no APKs were found
     if not apps:
         apps = [
-            {"name": "SmartTube", "package": "com.smarttube.tv", "icon": "🎬", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Titanium Browser", "package": "com.jqssun.browser", "icon": "🌐", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Aurora Store", "package": "com.aurora.store", "icon": "🛍️", "version": "1.0", "installed": False, "installing": False},
+            {"name": "SmartTube", "package": "com.smarttube.tv", "icon": "📺", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Titanium Browser", "package": "com.jqssun.browser", "icon": "🔍", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Aurora Store", "package": "com.aurora.store", "icon": "📦", "version": "1.0", "installed": False, "installing": False},
         ]
     
     return apps
+
+
+def get_app_icon(package):
+    """Get app icon symbol or emoji for an installed app."""
+    # Map packages to meaningful Unicode/emoji
+    icons = {
+        "com.smarttube.tv": "📺",
+        "com.jqssun.browser": "🔍",
+        "com.aurora.store": "📦",
+        "com.android.settings": "⚙️",
+        "com.google.android.youtube": "📹",
+        "com.google.android.gms": "☁️",
+        "com.google.android.apps.maps": "🗺️",
+        "com.google.android.apps.messaging": "💬",
+        "com.google.android.apps.photos": "📸",
+    }
+    return icons.get(package, "📱")  # Default phone icon
 
 
 def extract_apk_package(apk_path):

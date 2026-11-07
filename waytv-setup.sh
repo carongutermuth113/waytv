@@ -218,7 +218,7 @@ check_platform() {
 LOW_RESOURCES=0
 check_resources() {
     local ram_mb cores disk_gb cpu gpu drv below=() low=() line
-    log "Checking the hardware"
+    log "🔧 Checking the hardware"
     ram_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
     cores=$(nproc)
     disk_gb=$(df --output=avail -BG / 2>/dev/null | tail -n1 | tr -dc 0-9)
@@ -278,7 +278,7 @@ do_uninstall() {
         [[ "$confirm" == UNINSTALL ]] || die "Cancelled."
     fi
 
-    log "Stopping the kiosk and returning to a normal boot"
+    log "⏹️  Stopping the kiosk and returning to a normal boot"
     systemctl disable --now waydroid-kiosk.service waytv-update.timer waytv-check.timer waytv-perf.service waytv-agent.service 2>/dev/null || true
     systemctl set-default multi-user.target
     runuser -u "$KUSER" -- waydroid session stop >/dev/null 2>&1 || true
@@ -357,7 +357,7 @@ do_uninstall() {
 
 # ------------------------------------------------------------------ install
 install_packages() {
-    log "Checking packages (installs only what is missing)"
+    log "📦 Checking packages (installs only what is missing)"
     local want=(waydroid lxc dnsmasq-base nftables cage seatd bluez cec-utils whiptail
                 python3-venv python3-pip git curl ca-certificates
                 build-essential dkms "linux-headers-$(uname -r)" linux-headers-amd64
@@ -604,7 +604,7 @@ EOF
 }
 
 setup_waydroid() {
-    log "Checking the Waydroid container"
+    log "🤖 Checking the Waydroid container"
     systemctl enable --now waydroid-container.service
     if [[ ! -f /var/lib/waydroid/images/system.img ]]; then
         log "Initialising Waydroid (vanilla, no GApps; downloads 1-2 GB)"
@@ -628,7 +628,7 @@ stop_android() {
 install_arm_translation() {
     local arm=libndk arm_old=libhoudini py=/opt/waydroid_script/venv/bin/python3
     if grep -q GenuineIntel /proc/cpuinfo; then arm=libhoudini; arm_old=libndk; fi
-    log "Installing ARM translation ($arm) for ARM-only apps (third-party project)"
+    log "💪 Installing ARM translation ($arm) for ARM-only apps (third-party project)"
     if [[ ! -d /opt/waydroid_script/venv ]]; then
         rm -rf /opt/waydroid_script
         git clone --depth 1 https://github.com/casualsnek/waydroid_script /opt/waydroid_script \
@@ -742,7 +742,7 @@ EOF
 # Android image's properties on every `waydroid upgrade` (also --offline), so it survives updates.
 ANDROID_PROPS=(dalvik.vm.heapgrowthlimit=256m dalvik.vm.heapsize=512m)
 tune_android() {
-    log "Checking Android memory settings"
+    log "📱 Checking Android memory settings"
     local cfg=/var/lib/waydroid/waydroid.cfg out
     [[ -f $cfg ]] || { warn "$cfg missing; skipping Android memory settings."; return 0; }
     out="$(python3 - "$cfg" "${ANDROID_PROPS[@]}" <<'PY'
@@ -2900,7 +2900,7 @@ do_install() {
             && echo "  done" || warn "Android image upgrade failed; run 'sudo waytv-update' to see why."
     fi
 
-    log "Checking the WayTV Settings app"
+    log "⚙️  Checking the WayTV Settings app"
     /usr/local/bin/waytv-apps waytv || warn "WayTV Settings app install failed; retry with: sudo waytv-apps waytv"
 
     if [[ "$(opt_get AURORA_STORE)" == yes ]]; then
@@ -2908,7 +2908,7 @@ do_install() {
         /usr/local/bin/waytv-apps aurora || warn "Aurora Store install failed; retry with: sudo waytv-apps aurora"
     fi
     
-    log "Preparing optional apps for the app installer"
+    log "📥 Preparing optional apps for the app installer"
     mkdir -p /data/apps
     # SmartTube (YouTube client for Android TV)
     if [[ ! -f /data/apps/smarttube.apk ]]; then
@@ -2933,7 +2933,7 @@ do_install() {
             || rm -f /data/apps/titanium-browser.apk.tmp
     fi
 
-    log "Checking the boot target"
+    log "🚀 Checking the boot target"
     systemctl enable --now seatd.service
     systemctl disable --now display-manager.service 2>/dev/null || true
     systemctl enable waydroid-kiosk.service
