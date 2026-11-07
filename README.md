@@ -543,6 +543,40 @@ sudo waytv-check                     # should say "Everything is up to date" or 
 
 If you make the repo public, leave `GITHUB_TOKEN` empty.
 
+### Bypassing GitHub API rate limits
+
+GitHub's API has rate limits: **60 requests/hour** without authentication, **5000 requests/hour** with a token.
+If you have multiple boxes or frequent manual updates, add a Personal Access Token to avoid hitting the limit.
+
+**Steps to add a token:**
+
+1. Go to https://github.com/settings/tokens?type=beta
+2. Click **Generate new token** → **Fine-grained personal access token**
+3. Fill in:
+   - Token name: `WayTV`
+   - Repository access: **Only select repositories** → choose `carongutermuth113/waytv`
+   - Permissions: **Repository permissions** → **Contents** → set to **Read-only**
+   - Nothing else is needed
+4. Click **Generate token**
+5. Copy the token (starts with `ghp_`)
+6. On the box, edit the config:
+   ```bash
+   sudo nano /etc/waytv/update.conf
+   ```
+   Paste the token after `GITHUB_TOKEN=` (e.g., `GITHUB_TOKEN=ghp_abcdefgh...`)
+7. Save and exit, then test:
+   ```bash
+   sudo waytv-check
+   ```
+
+**Token permissions:**
+- A fine-grained token with **Contents: Read-only** cannot modify anything
+- It only reads the repo (fetching the setup script)
+- Safe to store on the box, even in a root-owned config file
+
+**Revoking the token:**
+Go back to https://github.com/settings/tokens and delete the token if you no longer need it.
+
 > **Releasing a new version:** bump `SCRIPT_VERSION=` near the top of the
 > script in every commit you want boxes to pick up. Boxes only install a
 > version **higher** than the one they have. They never downgrade.

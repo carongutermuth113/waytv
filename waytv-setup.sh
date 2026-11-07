@@ -431,7 +431,11 @@ write_config() {
 # GitHub repo and branch that hold waytv-setup.sh
 REPO=carongutermuth113/waytv
 BRANCH=main
-# Read-only token, needed only while the repo is private (fine-grained, Contents: Read-only)
+# GitHub Personal Access Token (bypass rate limits)
+# 1. Go to https://github.com/settings/tokens?type=beta
+# 2. Create new token: "WayTV", Repo: Read-only (Contents: Read-only)
+# 3. Copy token and paste here: GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+# Without token: 60 requests/hour; With token: 5000 requests/hour
 GITHUB_TOKEN=
 # yes = the weekly update installs new script versions automatically; no = only notify
 AUTO_APPLY_SCRIPT=yes
