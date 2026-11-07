@@ -266,28 +266,36 @@ def start_job(kind, title, shell_cmd):
 def scan_apps():
     """List available APKs in /data/apps/ with metadata."""
     apps_dir = "/data/apps"
-    if not os.path.isdir(apps_dir):
-        return []
-    
     apps = []
-    for fn in sorted(os.listdir(apps_dir)):
-        if not fn.endswith(".apk"):
-            continue
-        path = os.path.join(apps_dir, fn)
-        pkg = extract_apk_package(path)
-        if not pkg:
-            continue
-        
-        # Check if installed
-        installed = android("/system/bin/pm", "list", "packages") and pkg in android("/system/bin/pm", "list", "packages")
-        
-        apps.append({
-            "name": fn.replace(".apk", "").replace("-", " "),
-            "package": pkg,
-            "version": "1.0",
-            "installed": bool(installed),
-            "installing": False
-        })
+    
+    if os.path.isdir(apps_dir):
+        for fn in sorted(os.listdir(apps_dir)):
+            if not fn.endswith(".apk"):
+                continue
+            path = os.path.join(apps_dir, fn)
+            pkg = extract_apk_package(path)
+            if not pkg:
+                continue
+            
+            # Check if installed
+            installed = android("/system/bin/pm", "list", "packages") and pkg in android("/system/bin/pm", "list", "packages")
+            
+            apps.append({
+                "name": fn.replace(".apk", "").replace("-", " "),
+                "package": pkg,
+                "version": "1.0",
+                "installed": bool(installed),
+                "installing": False
+            })
+    
+    # Demo apps if directory is empty or no APKs were found
+    if not apps:
+        apps = [
+            {"name": "SmartTube", "package": "com.smarttube.tv", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Titanium Browser", "package": "com.jqssun.browser", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Aurora Store", "package": "com.aurora.store", "version": "1.0", "installed": False, "installing": False},
+        ]
+    
     return apps
 
 

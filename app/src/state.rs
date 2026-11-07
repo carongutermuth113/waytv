@@ -625,12 +625,19 @@ impl AppState {
             }
             Click::ModalItem(i) => {
                 match self.modals.last_mut() {
-                    Some(Modal::Confirm { focus, .. }) if i < 2 => *focus = i,
-                    Some(Modal::List { items, focus, .. }) if i < items.len() => *focus = i,
-                    Some(Modal::Job { .. }) | Some(Modal::Info { .. }) => {}
-                    _ => return vec![],
+                    Some(Modal::Confirm { focus, .. }) if i < 2 => {
+                        *focus = i;
+                        self.nav(Nav::Select)
+                    }
+                    Some(Modal::List { items, focus, .. }) if i < items.len() => {
+                        *focus = i;
+                        self.nav(Nav::Select)
+                    }
+                    Some(Modal::Job { .. }) | Some(Modal::Info { .. }) | Some(Modal::Changelog { .. }) => {
+                        self.nav(Nav::Select)
+                    }
+                    _ => vec![],
                 }
-                self.nav(Nav::Select)
             }
             Click::ApplyBtn if self.modals.is_empty() && self.main_visible() => self.open_apply(),
             Click::Back => self.nav(Nav::Back),

@@ -2925,6 +2925,13 @@ do_install() {
             && echo "  Downloaded Aurora Store" \
             || rm -f /data/apps/aurorastore.apk.tmp
     fi
+    # Titanium Browser (web browser for Android TV)
+    if [[ ! -f /data/apps/titanium-browser.apk ]]; then
+        wget -q -O /data/apps/titanium-browser.apk.tmp https://github.com/jqssun/android-titanium-browser/releases/download/latest/app-release.apk 2>/dev/null \
+            && mv /data/apps/titanium-browser.apk.tmp /data/apps/titanium-browser.apk \
+            && echo "  Downloaded Titanium Browser" \
+            || rm -f /data/apps/titanium-browser.apk.tmp
+    fi
 
     log "Checking the boot target"
     systemctl enable --now seatd.service
