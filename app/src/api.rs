@@ -242,6 +242,8 @@ pub enum ApiReq {
     InstallApp(String),
     /// Update the WayTV Settings app from GitHub.
     UpdateApp,
+    /// Update all installed apps.
+    UpdateAllApps,
     UpdateCheck,
     UpdateRun,
     RestartAndroid,
@@ -344,6 +346,11 @@ impl ApiReq {
             ApiReq::UpdateApp => (
                 "POST",
                 "/api/app/update".into(),
+                Some("{}".into()),
+            ),
+            ApiReq::UpdateAllApps => (
+                "POST",
+                "/api/apps/update-all".into(),
                 Some("{}".into()),
             ),
             ApiReq::SetDensity(v) => {

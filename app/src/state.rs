@@ -47,6 +47,8 @@ pub enum RowKind {
     RestartAndroid,
     CheckUpdates,
     UpdateWayTV,
+    UpdateAllApps,
+    AutoUpdateApps,
     ShowJob,
     Reboot,
     /// Apps to install (from /data/apps/*)
@@ -280,15 +282,19 @@ impl AppState {
             }
             Section::System => vec![RowKind::Reboot],
             Section::Apps => {
-                self.status
-                    .as_ref()
-                    .map(|st| {
-                        st.apps
-                            .iter()
-                            .map(|a| RowKind::InstallApp(a.package.clone()))
-                            .collect()
-                    })
-                    .unwrap_or_default()
+                let mut v = vec![RowKind::UpdateAllApps, RowKind::AutoUpdateApps];
+                v.extend(
+                    self.status
+                        .as_ref()
+                        .map(|st| {
+                            st.apps
+                                .iter()
+                                .map(|a| RowKind::InstallApp(a.package.clone()))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                );
+                v
             }
         }
     }
@@ -398,7 +404,23 @@ impl AppState {
                         app.version.as_deref().unwrap_or("?")
                     )
                 };
-                (app.name, status)
+                let icon = app.icon.as_deref().unwrap_or("📦");
+                let name = format!("{} {}", icon, app.name);
+                (name, status)
+            }
+            RowKind::UpdateAllApps => {
+                let updates_available = st.apps.iter().any(|a| a.installed && !a.installing);
+                (
+                    "🔄 Update all apps".into(),
+                    if updates_available {
+                        "Updates available".into()
+                    } else {
+                        String::new()
+                    },
+                )
+            }
+            RowKind::AutoUpdateApps => {
+                ("⚙️  Auto-update apps".into(), "Coming soon".into())
             }
         }
     }
@@ -956,6 +978,33 @@ impl AppState {
                     "Update",
                     ApiReq::UpdateRun,
                 )
+            }
+            RowKind::UpdateAllApps => {
+                let st = self.status.clone().unwrap_or_default();
+                let apps_to_update: Vec<_> = st.apps.iter()
+                    .filter(|a| a.installed && !a.installing)
+                    .collect();
+                
+                if apps_to_update.is_empty() {
+                    self.set_banner("No installed apps to update", false);
+                    return vec![];
+                }
+                
+                let app_names = apps_to_update.iter()
+                    .map(|a| a.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                
+                self.confirm(
+                    "Update installed apps?",
+                    &format!("Updates: {}", app_names),
+                    "Update",
+                    ApiReq::UpdateAllApps,
+                )
+            }
+            RowKind::AutoUpdateApps => {
+                self.set_banner("Auto-update setting will be added soon", false);
+                vec![]
             }
             RowKind::ShowJob => {
                 if let Some(job) = st.job.clone() {

@@ -268,6 +268,13 @@ def scan_apps():
     apps_dir = "/data/apps"
     apps = []
     
+    # Icon mapping for known apps
+    app_icons = {
+        "com.smarttube.tv": "🎬",
+        "com.jqssun.browser": "🌐",
+        "com.aurora.store": "🛍️",
+    }
+    
     if os.path.isdir(apps_dir):
         for fn in sorted(os.listdir(apps_dir)):
             if not fn.endswith(".apk"):
@@ -283,6 +290,7 @@ def scan_apps():
             apps.append({
                 "name": fn.replace(".apk", "").replace("-", " "),
                 "package": pkg,
+                "icon": app_icons.get(pkg),
                 "version": "1.0",
                 "installed": bool(installed),
                 "installing": False
@@ -291,9 +299,9 @@ def scan_apps():
     # Demo apps if directory is empty or no APKs were found
     if not apps:
         apps = [
-            {"name": "SmartTube", "package": "com.smarttube.tv", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Titanium Browser", "package": "com.jqssun.browser", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Aurora Store", "package": "com.aurora.store", "version": "1.0", "installed": False, "installing": False},
+            {"name": "SmartTube", "package": "com.smarttube.tv", "icon": "🎬", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Titanium Browser", "package": "com.jqssun.browser", "icon": "🌐", "version": "1.0", "installed": False, "installing": False},
+            {"name": "Aurora Store", "package": "com.aurora.store", "icon": "🛍️", "version": "1.0", "installed": False, "installing": False},
         ]
     
     return apps
