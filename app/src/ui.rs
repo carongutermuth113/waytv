@@ -455,9 +455,9 @@ fn draw_main(ui: &mut Ui, st: &AppState, screen: Rect, interactive: bool, clicks
     let row_h = pitch - 10.0;
     for (i, kind) in rows.into_iter().enumerate() {
         let rect = Rect::from_min_size(pos2(x0, y), vec2(w, row_h));
-        let (name, value) = st.row_text(kind);
+        let (name, value) = st.row_text(&kind);
         let focused = st.pane == Pane::Rows && st.row == i;
-        let color = if st.row_pending(kind) { WARN } else { ACCENT };
+        let color = if st.row_pending(&kind) { WARN } else { ACCENT };
         item(ui, rect, &name, &value, focused, false, true, color);
         if clicked(ui, rect, ("row", sec.title(), i), interactive) {
             clicks.push(Click::Row(i));

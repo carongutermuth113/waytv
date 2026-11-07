@@ -14,14 +14,16 @@ pub enum Section {
     Android,
     Updates,
     System,
+    Apps,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::Display,
         Section::Android,
         Section::Updates,
         Section::System,
+        Section::Apps,
     ];
     pub fn title(self) -> &'static str {
         match self {
@@ -29,11 +31,12 @@ impl Section {
             Section::Android => "Android",
             Section::Updates => "Updates",
             Section::System => "System",
+            Section::Apps => "Apps",
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RowKind {
     Resolution,
     Scaling,
@@ -46,6 +49,8 @@ pub enum RowKind {
     UpdateAll,
     ShowJob,
     Reboot,
+    /// Apps to install (from /data/apps/*)
+    InstallApp(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -256,6 +261,17 @@ impl AppState {
                 v
             }
             Section::System => vec![RowKind::Reboot],
+            Section::Apps => {
+                self.status
+                    .as_ref()
+                    .map(|st| {
+                        st.apps
+                            .iter()
+                            .map(|a| RowKind::InstallApp(a.package.clone()))
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
         }
     }
 
@@ -269,7 +285,7 @@ impl AppState {
     }
 
     /// Name and current value of a row.
-    pub fn row_text(&self, kind: RowKind) -> (String, String) {
+    pub fn row_text(&self, kind: &RowKind) -> (String, String) {
         let st = self.status.clone().unwrap_or_default();
         let onoff = |v: Option<&str>, on: &str, a: &str, b: &str| match v {
             Some(x) if x == on => a.to_string(),
@@ -334,11 +350,32 @@ impl AppState {
                 st.job.as_ref().map(|j| j.title()).unwrap_or_default(),
             ),
             RowKind::Reboot => ("Reboot box".into(), String::new()),
+            RowKind::InstallApp(pkg) => {
+                let app = st
+                    .apps
+                    .iter()
+                    .find(|a| a.package == *pkg)
+                    .cloned()
+                    .unwrap_or_default();
+                let status = if app.installed {
+                    if app.installing {
+                        "Installing…".into()
+                    } else {
+                        "Installed".into()
+                    }
+                } else {
+                    format!(
+                        "v{}",
+                        app.version.as_deref().unwrap_or("?")
+                    )
+                };
+                (app.name, status)
+            }
         }
     }
 
     /// The row shows a staged (not yet applied) value.
-    pub fn row_pending(&self, kind: RowKind) -> bool {
+    pub fn row_pending(&self, kind: &RowKind) -> bool {
         let c = &self.changes;
         match kind {
             RowKind::Resolution => c.display.is_some(),
@@ -411,8 +448,8 @@ impl AppState {
             RowKind::Navbar,
             RowKind::TimeZone,
         ] {
-            if self.row_pending(kind) {
-                let (name, value) = self.row_text(kind);
+            if self.row_pending(&kind) {
+                let (name, value) = self.row_text(&kind);
                 lines.push(format!("• {name}: {value}"));
             }
         }
@@ -523,7 +560,7 @@ impl AppState {
             (Nav::Left | Nav::Back, Pane::Rows) => self.pane = Pane::Sections,
             (Nav::Right, Pane::Rows) => {}
             (Nav::Select, Pane::Rows) => {
-                if let Some(&k) = self.rows().get(self.row) {
+                if let Some(k) = self.rows().get(self.row) {
                     return self.activate(k);
                 }
             }
@@ -764,7 +801,7 @@ impl AppState {
         vec![]
     }
 
-    fn activate(&mut self, k: RowKind) -> Vec<Effect> {
+    fn activate(&mut self, k: &RowKind) -> Vec<Effect> {
         let st = self.status.clone().unwrap_or_default();
         match k {
             RowKind::Resolution => {
@@ -878,6 +915,25 @@ impl AppState {
                 "Reboot",
                 ApiReq::Reboot,
             ),
+            RowKind::InstallApp(pkg) => {
+                let app = st
+                    .apps
+                    .iter()
+                    .find(|a| a.package == *pkg)
+                    .cloned()
+                    .unwrap_or_default();
+                if app.installed {
+                    self.set_banner(format!("{} is already installed", app.name), false);
+                    vec![]
+                } else {
+                    self.confirm(
+                        &format!("Install {}?", app.name),
+                        &format!("Download and install from {}. About a minute.", app.package),
+                        "Install",
+                        ApiReq::InstallApp(pkg.clone()),
+                    )
+                }
+            }
         }
     }
 
@@ -1254,12 +1310,14 @@ mod tests {
         s.nav(Nav::Down);
         assert_eq!(s.section_kind(), Section::Updates);
         s.nav(Nav::Down);
+        assert_eq!(s.section_kind(), Section::System);
         s.nav(Nav::Down);
-        assert_eq!(s.section_kind(), Section::System, "clamped at bottom");
+        assert_eq!(s.section_kind(), Section::Apps, "clamped at bottom");
         s.nav(Nav::NextSection);
         assert_eq!(s.section_kind(), Section::Display, "R1 wraps");
         s.nav(Nav::PrevSection);
-        assert_eq!(s.section_kind(), Section::System, "L1 wraps");
+        assert_eq!(s.section_kind(), Section::Apps, "L1 wraps");
+        s.nav(Nav::PrevSection);
         s.nav(Nav::PrevSection);
         s.nav(Nav::PrevSection);
         assert_eq!(s.section_kind(), Section::Android);
@@ -1456,11 +1514,11 @@ mod tests {
     #[test]
     fn row_texts() {
         let s = loaded();
-        assert_eq!(s.row_text(RowKind::Resolution).1, "1080p");
-        assert_eq!(s.row_text(RowKind::Scaling).1, "240 (suggested)");
-        assert_eq!(s.row_text(RowKind::Navbar).1, "Hidden");
-        assert_eq!(s.row_text(RowKind::Overlay).1, "Off");
-        assert_eq!(s.row_text(RowKind::TimeZone).1, "America/New_York");
+        assert_eq!(s.row_text(&RowKind::Resolution).1, "1080p");
+        assert_eq!(s.row_text(&RowKind::Scaling).1, "240 (suggested)");
+        assert_eq!(s.row_text(&RowKind::Navbar).1, "Hidden");
+        assert_eq!(s.row_text(&RowKind::Overlay).1, "Off");
+        assert_eq!(s.row_text(&RowKind::TimeZone).1, "America/New_York");
         let mut st: Status = serde_json::from_value(status_json()).unwrap();
         st.density.current = None;
         assert_eq!(scaling_value(&st), "Android default (180)");
@@ -1516,8 +1574,8 @@ mod tests {
         assert_eq!(s.nav(Nav::Select), vec![], "choosing only stages, nothing is sent");
         assert!(s.modals.is_empty());
         assert_eq!(s.changes.display, Some((3840, 2160, Some(30.0))));
-        assert!(s.row_pending(RowKind::Resolution));
-        assert_eq!(s.row_text(RowKind::Resolution).1, "1920x1080 at 60 Hz  →  3840x2160 at 30 Hz");
+        assert!(s.row_pending(&RowKind::Resolution));
+        assert_eq!(s.row_text(&RowKind::Resolution).1, "1920x1080 at 60 Hz  →  3840x2160 at 30 Hz");
     }
 
     #[test]
@@ -1636,7 +1694,7 @@ mod tests {
     #[test]
     fn hdr_row_and_info_dialog() {
         let mut s = loaded_v2();
-        assert_eq!(s.row_text(RowKind::Hdr).1, "TV: HDR10, HLG · not available on this box");
+        assert_eq!(s.row_text(&RowKind::Hdr).1, "TV: HDR10, HLG · not available on this box");
         s.nav(Nav::Select);
         s.row = 3;
         s.nav(Nav::Select);
@@ -1646,7 +1704,7 @@ mod tests {
         assert!(s.modals.is_empty());
         // v1 agent: no hdr field
         let s1 = loaded();
-        assert_eq!(s1.row_text(RowKind::Hdr).1, "Unknown");
+        assert_eq!(s1.row_text(&RowKind::Hdr).1, "Unknown");
     }
 
     #[test]

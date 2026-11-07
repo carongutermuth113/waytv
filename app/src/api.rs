@@ -238,6 +238,8 @@ pub enum ApiReq {
     SetTimezone(String),
     /// API v2: several staged changes in one request (one Android restart at most).
     Apply(Changes),
+    /// Install an app: package name (e.g. "com.smarttube.next").
+    InstallApp(String),
     UpdateCheck,
     UpdateRun,
     RestartAndroid,
@@ -332,6 +334,11 @@ impl ApiReq {
                 Some(json!({"width": width, "height": height}).to_string()),
             ),
             ApiReq::Apply(c) => ("POST", "/api/apply".into(), Some(c.to_json().to_string())),
+            ApiReq::InstallApp(pkg) => (
+                "POST",
+                "/api/apps/install".into(),
+                Some(json!({"package": pkg}).to_string()),
+            ),
             ApiReq::SetDensity(v) => {
                 let value = v.to_json();
                 (

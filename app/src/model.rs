@@ -18,6 +18,17 @@ where
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct AppMetadata {
+    pub name: String,
+    pub package: String,
+    pub icon: Option<String>,
+    pub version: Option<String>,
+    pub installed: bool,
+    pub installing: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct Status {
     #[serde(deserialize_with = "lenient")]
     pub api: Option<i64>,
@@ -54,6 +65,9 @@ pub struct Status {
     /// API v2; missing on v1 agents.
     #[serde(deserialize_with = "lenient")]
     pub hdr: Option<Hdr>,
+    /// Available apps to install from /data/apps/*.
+    #[serde(deserialize_with = "lenient")]
+    pub apps: Vec<AppMetadata>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
