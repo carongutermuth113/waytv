@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION=19              # bump when the script changes
+SCRIPT_VERSION=19.1            # bump when the script changes (major.minor)
 STATE=/etc/waytv
 MARK=$STATE/installed          # present once a full install finished
 STEPS=$STATE/steps             # one file per one-time step, holding the step version
@@ -2210,7 +2210,7 @@ code="$(curl -sL --max-time 60 "${hdr[@]}" -o "$tmp" -w '%{http_code}' \
 gh_problem=""
 case "$code" in
     200) if bash -n "$tmp" 2>/dev/null; then
-             latest="$(sed -n 's/^SCRIPT_VERSION=\([0-9][0-9]*\).*/\1/p' "$tmp" | head -n1)"
+             latest="$(sed -n 's/^SCRIPT_VERSION=\([0-9][0-9]*\(\.[0-9][0-9]*\)\?\).*/\1/p' "$tmp" | head -n1)"
          else
              gh_problem="the downloaded script has syntax errors; not using it."
          fi ;;
@@ -2225,7 +2225,11 @@ case "$code" in
     *)   gh_problem="GitHub answered HTTP $code." ;;
 esac
 script_new=0
-if [[ $latest =~ ^[0-9]+$ && $installed =~ ^[0-9]+$ ]] && (( latest > installed )); then
+# Version comparison: supports both "19" and "19.1" formats
+# Convert versions to comparable format: "19" -> "19.0", "19.1" stays "19.1"
+cmp_latest="${latest%.*}.$((${latest##*.} + 0))"  # latest with .0 if needed
+cmp_installed="${installed%.*}.$((${installed##*.} + 0))"  # same for installed
+if [[ -n $latest && -n $installed ]] && [[ "$cmp_latest" > "$cmp_installed" ]]; then
     script_new=1
     install -m 700 "$tmp" "$LIB/latest-setup.sh"
 fi
@@ -2620,9 +2624,12 @@ rc=0
 if [[ $SELF_UPDATE -eq 1 ]]; then
     echo "==> Checking GitHub for a new WayTV setup script"
     /usr/local/bin/waytv-check --no-notify | grep -i 'script\|github' || true
-    new="$(sed -n 's/^SCRIPT_VERSION=\([0-9][0-9]*\).*/\1/p' /var/lib/waytv/latest-setup.sh 2>/dev/null | head -n1)"
+    new="$(sed -n 's/^SCRIPT_VERSION=\([0-9][0-9]*\(\.[0-9][0-9]*\)\?\).*/\1/p' /var/lib/waytv/latest-setup.sh 2>/dev/null | head -n1)"
     cur="$(cat /etc/waytv/version 2>/dev/null || echo 0)"
-    if [[ $new =~ ^[0-9]+$ && $cur =~ ^[0-9]+$ ]] && (( new > cur )); then
+    # Compare versions: "19.1" > "19", "19.2" > "19.1"
+    cmp_new="${new%.*}.$((${new##*.} + 0))"
+    cmp_cur="${cur%.*}.$((${cur##*.} + 0))"
+    if [[ -n $new && -n $cur ]] && [[ "$cmp_new" > "$cmp_cur" ]]; then
         if [[ $AUTO -eq 0 || $AUTO_APPLY_SCRIPT == yes ]]; then
             echo "==> Installing WayTV setup script v$new (was v$cur)"
             bash /var/lib/waytv/latest-setup.sh --no-upgrade || { echo "Script update failed."; rc=1; }
