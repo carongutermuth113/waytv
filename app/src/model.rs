@@ -51,6 +51,35 @@ pub struct Status {
     pub perf: Option<String>,
     #[serde(deserialize_with = "lenient")]
     pub job: Option<Job>,
+    /// API v2; missing on v1 agents.
+    #[serde(deserialize_with = "lenient")]
+    pub hdr: Option<Hdr>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Hdr {
+    /// HDR formats the TV announces ("HDR10", "HLG").
+    #[serde(deserialize_with = "lenient")]
+    pub tv: Vec<String>,
+    #[serde(deserialize_with = "lenient")]
+    pub available: Option<bool>,
+    #[serde(deserialize_with = "lenient")]
+    pub reasons: Vec<String>,
+}
+
+/// One output mode the TV offers (API v2).
+#[derive(Debug, Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct Mode {
+    #[serde(deserialize_with = "lenient")]
+    pub width: Option<i64>,
+    #[serde(deserialize_with = "lenient")]
+    pub height: Option<i64>,
+    #[serde(deserialize_with = "lenient")]
+    pub refresh: Option<f64>,
+    #[serde(deserialize_with = "lenient")]
+    pub current: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -64,6 +93,11 @@ pub struct Display {
     pub refresh: Option<f64>,
     #[serde(deserialize_with = "lenient")]
     pub presets: Vec<Preset>,
+    /// API v2: every mode the TV offers, and the chosen rate (None = automatic).
+    #[serde(deserialize_with = "lenient")]
+    pub modes: Vec<Mode>,
+    #[serde(deserialize_with = "lenient")]
+    pub refresh_setting: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq)]
@@ -196,6 +230,9 @@ pub struct ActionReply {
     pub density: Option<i64>,
     #[serde(deserialize_with = "lenient")]
     pub tz: Option<String>,
+    /// /api/apply: which settings were changed.
+    #[serde(deserialize_with = "lenient")]
+    pub applied: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

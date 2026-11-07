@@ -1,4 +1,4 @@
-# WayTV agent API (v1)
+# WayTV agent API (v2)
 
 The WayTV Settings app (inside Android, written in Rust) talks to `waytv-agent`, a small root service on the
 Debian host. The agent listens **only** on the host side of Waydroid's bridge, so nothing on
@@ -43,12 +43,20 @@ The agent re-writes it after every Android start and after the app is installed 
   "uptime_s": 5231,
   "display": {
     "width": 1920, "height": 1080, "refresh": 60.0,
+    "refresh_setting": null,
+    "modes": [
+      {"width": 3840, "height": 2160, "refresh": 30.0,  "label": "3840x2160 at 30 Hz",  "current": false},
+      {"width": 1920, "height": 1080, "refresh": 120.0, "label": "1920x1080 at 120 Hz", "current": false},
+      {"width": 1920, "height": 1080, "refresh": 60.0,  "label": "1920x1080 at 60 Hz",  "current": true}
+    ],
     "presets": [
       {"id": "1080p", "width": 1920, "height": 1080, "label": "1080p (1920x1080) at 60 Hz", "available": true},
       {"id": "4k",    "width": 3840, "height": 2160, "label": "4K (3840x2160) at 30 Hz",   "available": true},
       {"id": "720p",  "width": 1280, "height": 720,  "label": "720p (1280x720) at 60 Hz",  "available": true}
     ]
   },
+  "hdr": {"tv": ["HDR10", "HLG"], "available": false,
+          "reasons": ["Waydroid draws Android in SDR only: ...", "The screen program (wlroots 0.18 in Debian 13) has no HDR output."]},
   "density": {"current": 240, "suggested": 240, "default": 180},
   "navbar": "hidden",
   "overlay": "off",
@@ -64,13 +72,31 @@ The agent re-writes it after every Android start and after the app is installed 
   "job": null
 }
 ```
+`display.modes` lists every mode the TV offers (biggest first; what the box's GPU can drive),
+`current` marks the active one. `display.refresh_setting` is the chosen refresh rate, or null for
+"automatic" (fastest rate up to 60 Hz). `hdr.tv` lists the HDR formats the TV announces;
+`hdr.available` says whether the box can output HDR now, `hdr.reasons` explains why not.
 `density.current` is null when Android uses its default. `navbar` is `hidden`/`shown`,
 `overlay` is `on`/`off`. `perf` is null when the overlay service is off. `job` is the
 running job (same shape as GET /api/jobs/<id>) or null. `updates.*` may be null before
 the first check.
 
-### POST /api/display  `{"width": 1920, "height": 1080}`
-Only sizes from `display.presets` are accepted. Saves the choice, switches the HDMI output
+### POST /api/apply  (v2, preferred)
+Apply several settings at once with **at most one Android restart**. Every key is optional;
+send only what the user changed:
+```json
+{"display": {"width": 3840, "height": 2160, "refresh": 30},
+ "density": 480, "navbar": "off", "overlay": "on", "timezone": "Europe/Madrid"}
+```
+`display.refresh` may be a number from `display.modes` or null/"auto" (fastest up to 60 Hz).
+`density` is 100-800, "auto" or "reset". Everything is validated first; if anything is invalid
+nothing changes and you get `400` with the reason. Time zone and scaling apply at once; display,
+navbar and overlay are combined into one task that restarts Android once.
+-> `{"ok": true, "applied": ["display", "density"], "restarting": true, "job": {...} | null}`.
+Values equal to the current ones are skipped (not listed in `applied`).
+
+### POST /api/display  `{"width": 1920, "height": 1080, "refresh": 60}`
+Any mode from `display.modes` is accepted (`refresh` optional). Saves the choice, switches the HDMI output
 and Android, adjusts scaling if a custom scaling was set. **Restarts Android** about 2 s after
 replying: `{"ok": true, "restarting": true}`.
 

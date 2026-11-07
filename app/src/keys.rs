@@ -16,6 +16,8 @@ pub enum Nav {
     PrevSection,
     NextSection,
     Refresh,
+    /// BUTTON_X: apply the pending changes.
+    Apply,
 }
 
 // android/keycodes.h
@@ -56,7 +58,8 @@ pub fn map_keycode(code: u32, shift: bool) -> Option<Nav> {
         KEYCODE_BUTTON_R1 | KEYCODE_PAGE_DOWN => Nav::NextSection,
         KEYCODE_TAB if shift => Nav::PrevSection,
         KEYCODE_TAB => Nav::NextSection,
-        KEYCODE_BUTTON_Y | KEYCODE_BUTTON_X | KEYCODE_F5 => Nav::Refresh,
+        KEYCODE_BUTTON_X => Nav::Apply,
+        KEYCODE_BUTTON_Y | KEYCODE_F5 => Nav::Refresh,
         _ => return None,
     })
 }

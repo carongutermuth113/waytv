@@ -3,7 +3,7 @@
 //! be unit tested on the host. The UI layer only renders this state and feeds
 //! `Nav` commands / clicks back; IO happens in the runtime through `Effect`s.
 
-use crate::api::{ApiError, ApiReq, DensityValue};
+use crate::api::{ApiError, ApiReq, Changes, DensityValue};
 use crate::keys::Nav;
 use crate::model::{ActionReply, Job, JobEnvelope, Status, TimezoneList, parse_iso8601};
 use std::time::{Duration, Instant};
@@ -38,6 +38,7 @@ pub enum RowKind {
     Resolution,
     Scaling,
     Overlay,
+    Hdr,
     Navbar,
     TimeZone,
     RestartAndroid,
@@ -56,6 +57,8 @@ pub enum Pane {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListKind {
     Resolution,
+    /// Second step of the resolution picker: refresh rates for (width, height).
+    Refresh(i64, i64),
     Scaling,
     TzRegion,
     TzCity(String),
@@ -63,7 +66,10 @@ pub enum ListKind {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListValue {
-    Display(i64, i64),
+    /// First step: a resolution; opens its refresh-rate list.
+    Resolution(i64, i64),
+    /// Final choice: (width, height, refresh or None = automatic).
+    Display(i64, i64, Option<f64>),
     Density(DensityValue),
     Region(String),
     Tz(String),
@@ -95,6 +101,11 @@ pub enum Modal {
     },
     Job {
         job: Job,
+    },
+    /// Read-only message with one OK button.
+    Info {
+        title: String,
+        body: String,
     },
 }
 
@@ -137,13 +148,13 @@ pub enum Click {
     Row(usize),
     /// Item i of the top dialog (list entry, or confirm button 0=Cancel/1=OK).
     ModalItem(usize),
+    ApplyBtn,
     Back,
     Retry,
 }
 
 pub const SCALING_CHOICES: [i64; 6] = [160, 240, 320, 360, 480, 560];
 const BANNER_TIME: Duration = Duration::from_secs(5);
-const RESTART_BODY: &str = "Android will restart, about a minute.";
 
 pub struct AppState {
     pub section: usize,
@@ -162,6 +173,8 @@ pub struct AppState {
     pub failures: u32,
     /// Set when focus moved; the UI scrolls the focused item into view and clears it.
     pub scroll_to_focus: bool,
+    /// Staged changes, sent together with Apply.
+    pub changes: Changes,
 }
 
 impl Default for AppState {
@@ -186,6 +199,7 @@ impl AppState {
             last_job_seen,
             failures: 0,
             scroll_to_focus: false,
+            changes: Changes::default(),
         }
     }
 
@@ -222,8 +236,17 @@ impl AppState {
     }
 
     pub fn rows_for(&self, s: Section) -> Vec<RowKind> {
+        self.base_rows(s)
+    }
+
+    fn base_rows(&self, s: Section) -> Vec<RowKind> {
         match s {
-            Section::Display => vec![RowKind::Resolution, RowKind::Scaling, RowKind::Overlay],
+            Section::Display => vec![
+                RowKind::Resolution,
+                RowKind::Scaling,
+                RowKind::Overlay,
+                RowKind::Hdr,
+            ],
             Section::Android => vec![RowKind::Navbar, RowKind::TimeZone, RowKind::RestartAndroid],
             Section::Updates => {
                 let mut v = vec![RowKind::CheckUpdates, RowKind::UpdateAll];
@@ -253,24 +276,48 @@ impl AppState {
             Some(_) => b.to_string(),
             None => "Unknown".to_string(),
         };
+        let arrow = |cur: String, new: Option<String>| match new {
+            Some(n) => format!("{cur}  →  {n}"),
+            None => cur,
+        };
+        let c = &self.changes;
         match kind {
-            RowKind::Resolution => ("Resolution".into(), current_resolution(&st)),
-            RowKind::Scaling => ("Scaling".into(), scaling_value(&st)),
+            RowKind::Resolution => (
+                "Resolution".into(),
+                arrow(
+                    current_resolution(&st),
+                    c.display.map(|(w, h, r)| display_label(w, h, r)),
+                ),
+            ),
+            RowKind::Scaling => (
+                "Scaling".into(),
+                arrow(scaling_value(&st), c.density.as_ref().map(|d| density_label(&st, d))),
+            ),
             RowKind::Overlay => (
                 "Performance overlay".into(),
-                onoff(st.overlay.as_deref(), "on", "On", "Off"),
+                arrow(
+                    onoff(st.overlay.as_deref(), "on", "On", "Off"),
+                    c.overlay.map(|on| if on { "On" } else { "Off" }.to_string()),
+                ),
             ),
+            RowKind::Hdr => ("HDR".into(), hdr_value(&st)),
             RowKind::Navbar => (
                 "Bottom bar".into(),
-                onoff(st.navbar.as_deref(), "hidden", "Hidden", "Shown"),
+                arrow(
+                    onoff(st.navbar.as_deref(), "hidden", "Hidden", "Shown"),
+                    c.navbar_hidden.map(|h| if h { "Hidden" } else { "Shown" }.to_string()),
+                ),
             ),
             RowKind::TimeZone => (
                 "Time zone".into(),
-                st.timezone
-                    .android
-                    .clone()
-                    .or(st.timezone.box_.clone())
-                    .unwrap_or_else(|| "Unknown".into()),
+                arrow(
+                    st.timezone
+                        .android
+                        .clone()
+                        .or(st.timezone.box_.clone())
+                        .unwrap_or_else(|| "Unknown".into()),
+                    c.timezone.clone(),
+                ),
             ),
             RowKind::RestartAndroid => ("Restart Android".into(), String::new()),
             RowKind::CheckUpdates => ("Check for updates".into(), String::new()),
@@ -288,6 +335,101 @@ impl AppState {
             ),
             RowKind::Reboot => ("Reboot box".into(), String::new()),
         }
+    }
+
+    /// The row shows a staged (not yet applied) value.
+    pub fn row_pending(&self, kind: RowKind) -> bool {
+        let c = &self.changes;
+        match kind {
+            RowKind::Resolution => c.display.is_some(),
+            RowKind::Scaling => c.density.is_some(),
+            RowKind::Overlay => c.overlay.is_some(),
+            RowKind::Navbar => c.navbar_hidden.is_some(),
+            RowKind::TimeZone => c.timezone.is_some(),
+            _ => false,
+        }
+    }
+
+    /// Drop staged values that equal the current ones (after a status refresh or a toggle).
+    pub fn prune_changes(&mut self) {
+        let Some(st) = self.status.clone() else { return };
+        let c = &mut self.changes;
+        if let Some((w, h, r)) = c.display
+            && st.display.width == Some(w)
+            && st.display.height == Some(h)
+            && same_rate(r, st.display.refresh_setting)
+        {
+            c.display = None;
+        }
+        if let Some(d) = &c.density {
+            let same = match d {
+                DensityValue::Dpi(n) => st.density.current == Some(*n),
+                DensityValue::Reset => st.density.current.is_none(),
+                DensityValue::Auto => {
+                    st.density.current.is_some() && st.density.current == st.density.suggested
+                }
+            };
+            if same {
+                c.density = None;
+            }
+        }
+        if let Some(hidden) = c.navbar_hidden
+            && st.navbar.is_some()
+            && hidden == (st.navbar.as_deref() == Some("hidden"))
+        {
+            c.navbar_hidden = None;
+        }
+        if let Some(on) = c.overlay
+            && st.overlay.is_some()
+            && on == (st.overlay.as_deref() == Some("on"))
+        {
+            c.overlay = None;
+        }
+        let cur_tz = st.timezone.android.clone().or(st.timezone.box_.clone());
+        if c.timezone.is_some() && c.timezone == cur_tz {
+            c.timezone = None;
+        }
+        let n = self.rows().len();
+        if n == 0 {
+            self.pane = Pane::Sections;
+        } else if self.row >= n {
+            self.row = n - 1;
+        }
+    }
+
+    fn open_apply(&mut self) -> Vec<Effect> {
+        if self.changes.is_empty() {
+            self.set_banner("No changes to apply", false);
+            return vec![];
+        }
+        let st = self.status.clone().unwrap_or_default();
+        let mut lines: Vec<String> = Vec::new();
+        for kind in [
+            RowKind::Resolution,
+            RowKind::Scaling,
+            RowKind::Overlay,
+            RowKind::Navbar,
+            RowKind::TimeZone,
+        ] {
+            if self.row_pending(kind) {
+                let (name, value) = self.row_text(kind);
+                lines.push(format!("• {name}: {value}"));
+            }
+        }
+        let _ = st;
+        lines.push(String::new());
+        lines.push(if self.changes.needs_restart() {
+            "Android restarts once to apply them, about a minute.".into()
+        } else {
+            "No restart needed.".into()
+        });
+        let n = self.changes.count();
+        self.confirm(
+            &format!("Apply {n} change{}?", if n == 1 { "" } else { "s" }),
+            &lines.join("\n"),
+            "Apply",
+            ApiReq::Apply(self.changes.clone()),
+        )
     }
 
     fn set_banner(&mut self, text: impl Into<String>, error: bool) {
@@ -351,6 +493,7 @@ impl AppState {
                 self.row = 0;
             }
             (Nav::Refresh, _) => return vec![Effect::Request(ApiReq::Status)],
+            (Nav::Apply, _) => return self.open_apply(),
             (Nav::Up, Pane::Sections) => {
                 if self.section > 0 {
                     self.section -= 1;
@@ -418,11 +561,12 @@ impl AppState {
                 match self.modals.last_mut() {
                     Some(Modal::Confirm { focus, .. }) if i < 2 => *focus = i,
                     Some(Modal::List { items, focus, .. }) if i < items.len() => *focus = i,
-                    Some(Modal::Job { .. }) => {}
+                    Some(Modal::Job { .. }) | Some(Modal::Info { .. }) => {}
                     _ => return vec![],
                 }
                 self.nav(Nav::Select)
             }
+            Click::ApplyBtn if self.modals.is_empty() && self.main_visible() => self.open_apply(),
             Click::Back => self.nav(Nav::Back),
             Click::Retry => self.retry(),
             _ => vec![],
@@ -469,13 +613,18 @@ impl AppState {
                             return self.choose(item);
                         }
                     }
-                    Nav::Refresh => {}
+                    Nav::Refresh | Nav::Apply => {}
                 }
             }
             Modal::Job { .. } => {
                 if matches!(n, Nav::Back | Nav::Select) {
                     self.modals.pop();
                     return vec![Effect::Request(ApiReq::Status)];
+                }
+            }
+            Modal::Info { .. } => {
+                if matches!(n, Nav::Back | Nav::Select) {
+                    self.modals.pop();
                 }
             }
         }
@@ -488,26 +637,19 @@ impl AppState {
             return vec![];
         }
         match item.value {
-            ListValue::Display(w, h) => {
-                if item.current {
-                    self.modals.pop();
-                    return vec![];
-                }
-                self.modals.push(Modal::Confirm {
-                    title: format!("Switch to {}?", item.label),
-                    body: RESTART_BODY.into(),
-                    ok_label: "Switch".into(),
-                    action: ApiReq::SetDisplay {
-                        width: w,
-                        height: h,
-                    },
-                    focus: 0,
-                });
+            ListValue::Resolution(w, h) => {
+                self.open_refresh_list(w, h);
                 vec![]
+            }
+            ListValue::Display(w, h, r) => {
+                self.modals.clear();
+                self.changes.display = Some((w, h, r));
+                self.staged()
             }
             ListValue::Density(v) => {
                 self.modals.clear();
-                self.send_action(ApiReq::SetDensity(v))
+                self.changes.density = Some(v);
+                self.staged()
             }
             ListValue::Region(r) => {
                 let current = self.current_tz();
@@ -534,9 +676,76 @@ impl AppState {
             }
             ListValue::Tz(tz) => {
                 self.modals.clear();
-                self.send_action(ApiReq::SetTimezone(tz))
+                self.changes.timezone = Some(tz);
+                self.staged()
             }
         }
+    }
+
+    /// After staging a value: drop no-op changes and tell the user how to apply.
+    fn staged(&mut self) -> Vec<Effect> {
+        self.prune_changes();
+        if self.changes.is_empty() {
+            self.set_banner("No changes pending", false);
+        } else {
+            self.set_banner("Change staged: choose Apply (or press X) to use it", false);
+        }
+        vec![]
+    }
+
+    /// Unique resolutions the TV offers (API v2 modes), biggest first, with their rates.
+    fn resolutions(&self) -> Vec<(i64, i64, Vec<f64>)> {
+        let st = self.status.clone().unwrap_or_default();
+        let mut out: Vec<(i64, i64, Vec<f64>)> = Vec::new();
+        for m in &st.display.modes {
+            let (Some(w), Some(h)) = (m.width, m.height) else { continue };
+            let r = m.refresh.unwrap_or(0.0);
+            match out.iter_mut().find(|(ow, oh, _)| *ow == w && *oh == h) {
+                Some((_, _, rates)) => {
+                    if r > 0.0 && !rates.iter().any(|x| (x - r).abs() < 0.01) {
+                        rates.push(r)
+                    }
+                }
+                None => out.push((w, h, if r > 0.0 { vec![r] } else { vec![] })),
+            }
+        }
+        out.sort_by(|a, b| (b.0 * b.1).cmp(&(a.0 * a.1)));
+        for (_, _, rates) in out.iter_mut() {
+            rates.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        }
+        out
+    }
+
+    fn open_refresh_list(&mut self, w: i64, h: i64) {
+        let st = self.status.clone().unwrap_or_default();
+        let is_cur = st.display.width == Some(w) && st.display.height == Some(h);
+        let rates = self
+            .resolutions()
+            .into_iter()
+            .find(|(rw, rh, _)| *rw == w && *rh == h)
+            .map(|(_, _, r)| r)
+            .unwrap_or_default();
+        let mut items = vec![ListItem {
+            label: "Automatic (fastest up to 60 Hz)".into(),
+            current: is_cur && st.display.refresh_setting.is_none(),
+            enabled: true,
+            value: ListValue::Display(w, h, None),
+        }];
+        for r in rates {
+            items.push(ListItem {
+                label: format!("{} Hz", fmt_rate(r)),
+                current: is_cur && same_rate(Some(r), st.display.refresh_setting),
+                enabled: true,
+                value: ListValue::Display(w, h, Some(r)),
+            });
+        }
+        let focus = items.iter().position(|i| i.current).unwrap_or(0);
+        self.modals.push(Modal::List {
+            kind: ListKind::Refresh(w, h),
+            title: format!("{w}x{h}: refresh rate"),
+            items,
+            focus,
+        });
     }
 
     fn current_tz(&self) -> Option<String> {
@@ -559,18 +768,33 @@ impl AppState {
         let st = self.status.clone().unwrap_or_default();
         match k {
             RowKind::Resolution => {
-                let items: Vec<ListItem> = st
-                    .display
-                    .presets
-                    .iter()
-                    .filter(|p| p.width.is_some() && p.height.is_some())
-                    .map(|p| ListItem {
-                        label: p.label(),
-                        current: p.width == st.display.width && p.height == st.display.height,
-                        enabled: p.is_available(),
-                        value: ListValue::Display(p.width.unwrap_or(0), p.height.unwrap_or(0)),
-                    })
-                    .collect();
+                let res = self.resolutions();
+                let items: Vec<ListItem> = if !res.is_empty() {
+                    res.iter()
+                        .map(|(w, h, rates)| ListItem {
+                            label: match rates.first() {
+                                Some(r) => format!("{w}x{h}   (up to {} Hz)", fmt_rate(*r)),
+                                None => format!("{w}x{h}"),
+                            },
+                            current: st.display.width == Some(*w) && st.display.height == Some(*h),
+                            enabled: true,
+                            value: ListValue::Resolution(*w, *h),
+                        })
+                        .collect()
+                } else {
+                    // API v1 agent: fixed presets, no refresh choice.
+                    st.display
+                        .presets
+                        .iter()
+                        .filter(|p| p.width.is_some() && p.height.is_some())
+                        .map(|p| ListItem {
+                            label: p.label(),
+                            current: p.width == st.display.width && p.height == st.display.height,
+                            enabled: p.is_available(),
+                            value: ListValue::Display(p.width.unwrap_or(0), p.height.unwrap_or(0), None),
+                        })
+                        .collect()
+                };
                 if items.is_empty() {
                     self.set_banner("The box did not report any resolutions", true);
                     return vec![];
@@ -586,24 +810,39 @@ impl AppState {
                 vec![]
             }
             RowKind::Overlay => {
-                let on = st.overlay.as_deref() == Some("on");
-                if on {
-                    self.confirm("Turn the performance overlay off?", RESTART_BODY, "Turn off", ApiReq::SetOverlay {
-                        on: false,
-                    })
-                } else {
-                    self.confirm("Turn the performance overlay on?", RESTART_BODY, "Turn on", ApiReq::SetOverlay {
-                        on: true,
-                    })
-                }
+                let cur_on = st.overlay.as_deref() == Some("on");
+                let now = self.changes.overlay.unwrap_or(cur_on);
+                self.changes.overlay = Some(!now);
+                self.staged()
             }
             RowKind::Navbar => {
-                let hidden = st.navbar.as_deref() == Some("hidden");
-                if hidden {
-                    self.confirm("Show the bottom bar?", RESTART_BODY, "Show", ApiReq::SetNavbar { visible: true })
-                } else {
-                    self.confirm("Hide the bottom bar?", RESTART_BODY, "Hide", ApiReq::SetNavbar { visible: false })
+                let cur_hidden = st.navbar.as_deref() == Some("hidden");
+                let now = self.changes.navbar_hidden.unwrap_or(cur_hidden);
+                self.changes.navbar_hidden = Some(!now);
+                self.staged()
+            }
+            RowKind::Hdr => {
+                let mut body = String::new();
+                match &st.hdr {
+                    None => body.push_str("This box's WayTV version does not report HDR yet. Update it from the Updates section."),
+                    Some(h) => {
+                        if h.tv.is_empty() {
+                            body.push_str("The TV does not announce HDR support.\n");
+                        } else {
+                            body.push_str(&format!("The TV supports: {}.\n", h.tv.join(", ")));
+                        }
+                        if h.available == Some(true) {
+                            body.push_str("\nHDR output is available on this box.");
+                        } else {
+                            body.push_str("\nHDR is not available on this box yet:");
+                            for r in &h.reasons {
+                                body.push_str(&format!("\n• {r}"));
+                            }
+                        }
+                    }
                 }
+                self.modals.push(Modal::Info { title: "HDR".into(), body });
+                vec![]
             }
             RowKind::TimeZone => {
                 if self.timezones.is_empty() {
@@ -707,6 +946,7 @@ impl AppState {
                 self.status = Some(st);
                 self.conn = Conn::Ok;
                 self.failures = 0;
+                self.prune_changes();
                 let n = self.rows().len();
                 if n == 0 {
                     self.pane = Pane::Sections;
@@ -776,6 +1016,9 @@ impl AppState {
             }
             _ => {
                 let r: ActionReply = serde_json::from_value(v).unwrap_or_default();
+                if matches!(req, ApiReq::Apply(_)) {
+                    self.changes = Changes::default();
+                }
                 if r.rebooting == Some(true) {
                     self.modals.clear();
                     self.blocking = Some(Blocking::Rebooting);
@@ -802,6 +1045,8 @@ impl AppState {
                     ApiReq::SetNavbar { .. } | ApiReq::SetOverlay { .. } => {
                         "Nothing to change".into()
                     }
+                    ApiReq::Apply(_) if r.applied.is_empty() => "Nothing to change".into(),
+                    ApiReq::Apply(_) => format!("Applied: {}", r.applied.join(", ")),
                     _ => "Done".into(),
                 };
                 self.set_banner(msg, false);
@@ -845,8 +1090,66 @@ impl AppState {
     }
 }
 
+pub fn fmt_rate(r: f64) -> String {
+    if (r - r.round()).abs() < 0.005 {
+        format!("{:.0}", r)
+    } else {
+        format!("{:.2}", r)
+    }
+}
+
+/// Two refresh settings are the same (None = automatic).
+pub fn same_rate(a: Option<f64>, b: Option<f64>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(x), Some(y)) => (x - y).abs() < 0.01,
+        _ => false,
+    }
+}
+
+pub fn display_label(w: i64, h: i64, r: Option<f64>) -> String {
+    match r {
+        Some(r) => format!("{w}x{h} at {} Hz", fmt_rate(r)),
+        None => format!("{w}x{h} (auto Hz)"),
+    }
+}
+
+pub fn density_label(st: &Status, d: &DensityValue) -> String {
+    match d {
+        DensityValue::Auto => match st.density.suggested {
+            Some(s) => format!("Auto ({s})"),
+            None => "Auto".into(),
+        },
+        DensityValue::Reset => "Android default".into(),
+        DensityValue::Dpi(n) => n.to_string(),
+    }
+}
+
+pub fn hdr_value(st: &Status) -> String {
+    match &st.hdr {
+        None => "Unknown".into(),
+        Some(h) => {
+            let tv = if h.tv.is_empty() {
+                "TV: no HDR".to_string()
+            } else {
+                format!("TV: {}", h.tv.join(", "))
+            };
+            if h.available == Some(true) {
+                format!("{tv} · available")
+            } else {
+                format!("{tv} · not available on this box")
+            }
+        }
+    }
+}
+
 pub fn current_resolution(st: &Status) -> String {
     let (w, h) = (st.display.width, st.display.height);
+    if !st.display.modes.is_empty()
+        && let (Some(w), Some(h), Some(r)) = (w, h, st.display.refresh)
+    {
+        return format!("{w}x{h} at {} Hz", fmt_rate(r));
+    }
     if let Some(p) = st
         .display
         .presets
@@ -1028,151 +1331,8 @@ mod tests {
         assert_eq!(s.nav(Nav::Down), vec![]);
     }
 
-    #[test]
-    fn resolution_flow() {
-        let mut s = loaded();
-        s.nav(Nav::Select); // into Display rows
-        s.nav(Nav::Select); // Resolution list
-        match s.modals.last() {
-            Some(Modal::List {
-                kind: ListKind::Resolution,
-                items,
-                focus,
-                ..
-            }) => {
-                assert_eq!(*focus, 0, "focus on current 1080p");
-                assert!(items[0].current && !items[2].enabled);
-            }
-            m => panic!("{m:?}"),
-        }
-        s.nav(Nav::Down);
-        s.nav(Nav::Select);
-        assert!(matches!(
-            s.modals.last(),
-            Some(Modal::Confirm {
-                focus: 0,
-                action: ApiReq::SetDisplay {
-                    width: 3840,
-                    height: 2160
-                },
-                ..
-            })
-        ));
-        s.nav(Nav::Back);
-        assert!(
-            matches!(s.modals.last(), Some(Modal::List { .. })),
-            "back returns to the list"
-        );
-        s.nav(Nav::Down); // 720p, unavailable
-        assert_eq!(s.nav(Nav::Select), vec![]);
-        assert!(s.banner.as_ref().unwrap().error);
-        s.nav(Nav::Up);
-        s.nav(Nav::Select);
-        s.nav(Nav::Right);
-        assert_eq!(
-            s.nav(Nav::Select),
-            vec![Effect::Request(ApiReq::SetDisplay {
-                width: 3840,
-                height: 2160
-            })]
-        );
-        assert!(s.modals.is_empty());
-        s.on_response(
-            &ApiReq::SetDisplay {
-                width: 3840,
-                height: 2160,
-            },
-            Ok(json!({"ok": true, "restarting": true})),
-            0,
-        );
-        assert_eq!(s.blocking, Some(Blocking::Restarting));
-        assert!(!s.polling_allowed());
-    }
 
-    #[test]
-    fn scaling_is_instant() {
-        let mut s = loaded();
-        s.nav(Nav::Select);
-        s.nav(Nav::Down);
-        s.nav(Nav::Select);
-        let Some(Modal::List { items, focus, .. }) = s.modals.last() else {
-            panic!()
-        };
-        assert_eq!(items[*focus].label, "240 (suggested)");
-        assert_eq!(items.len(), 8);
-        s.nav(Nav::Down);
-        let fx = s.nav(Nav::Select);
-        assert_eq!(
-            fx,
-            vec![Effect::Request(ApiReq::SetDensity(DensityValue::Dpi(320)))]
-        );
-        assert!(s.pending.is_some());
-        let fx = s.on_response(
-            &ApiReq::SetDensity(DensityValue::Dpi(320)),
-            Ok(json!({"ok":true,"density":320})),
-            0,
-        );
-        assert_eq!(fx, vec![Effect::Request(ApiReq::Status)]);
-        assert_eq!(s.banner.as_ref().unwrap().text, "Scaling set to 320");
-        assert!(s.pending.is_none());
-    }
 
-    #[test]
-    fn timezone_picker() {
-        let mut s = loaded();
-        s.section = 1;
-        s.nav(Nav::Select);
-        s.nav(Nav::Down);
-        assert_eq!(s.nav(Nav::Select), vec![Effect::Request(ApiReq::Timezones)]);
-        s.on_response(
-            &ApiReq::Timezones,
-            Ok(json!({"ok": true, "timezones": ["Africa/Abidjan", "America/Chicago", "America/New_York",
-                "Europe/Berlin", "Europe/Paris", "UTC"]})),
-            0,
-        );
-        let Some(Modal::List {
-            kind: ListKind::TzRegion,
-            items,
-            focus,
-            ..
-        }) = s.modals.last()
-        else {
-            panic!()
-        };
-        assert_eq!(
-            items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
-            ["Africa", "America", "Europe"]
-        );
-        assert_eq!(*focus, 1, "current region focused");
-        s.nav(Nav::Right);
-        let Some(Modal::List {
-            kind: ListKind::TzCity(r),
-            items,
-            focus,
-            ..
-        }) = s.modals.last()
-        else {
-            panic!()
-        };
-        assert_eq!(r, "America");
-        assert_eq!(items[*focus].label, "New York");
-        s.nav(Nav::Back);
-        s.nav(Nav::Down); // Europe
-        s.nav(Nav::Select);
-        s.nav(Nav::Select); // Berlin
-        assert!(s.modals.is_empty());
-        assert!(s.pending.is_some());
-        let fx = s.on_response(
-            &ApiReq::SetTimezone("Europe/Berlin".into()),
-            Ok(json!({"ok": true, "tz": "Europe/Berlin"})),
-            0,
-        );
-        assert_eq!(fx, vec![Effect::Request(ApiReq::Status)]);
-        assert_eq!(
-            s.banner.as_ref().unwrap().text,
-            "Time zone set to Europe/Berlin"
-        );
-    }
 
     #[test]
     fn jobs() {
@@ -1292,22 +1452,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn clicks() {
-        let mut s = loaded();
-        s.click(Click::Section(3));
-        assert_eq!((s.section, s.pane), (3, Pane::Sections));
-        s.click(Click::Row(0));
-        assert!(matches!(s.modals.last(), Some(Modal::Confirm { .. })));
-        assert_eq!(s.click(Click::ModalItem(0)), vec![]);
-        assert!(s.modals.is_empty());
-        s.click(Click::Section(0));
-        s.click(Click::Row(1));
-        assert_eq!(
-            s.click(Click::ModalItem(7)),
-            vec![Effect::Request(ApiReq::SetDensity(DensityValue::Reset))]
-        );
-    }
 
     #[test]
     fn row_texts() {
@@ -1322,4 +1466,214 @@ mod tests {
         assert_eq!(scaling_value(&st), "Android default (180)");
         assert!(scaling_items(&st).last().unwrap().current);
     }
+    fn status_v2() -> serde_json::Value {
+        let mut v = status_json();
+        v["api"] = json!(2);
+        v["display"]["refresh_setting"] = json!(null);
+        v["display"]["modes"] = json!([
+            {"width": 3840, "height": 2160, "refresh": 30.0, "current": false},
+            {"width": 3840, "height": 2160, "refresh": 24.0, "current": false},
+            {"width": 1920, "height": 1080, "refresh": 120.0, "current": false},
+            {"width": 1920, "height": 1080, "refresh": 60.0, "current": true},
+            {"width": 1280, "height": 720, "refresh": 60.0, "current": false}
+        ]);
+        v["hdr"] = json!({"tv": ["HDR10", "HLG"], "available": false,
+                          "reasons": ["Waydroid draws Android in SDR only."]});
+        v
+    }
+
+    fn loaded_v2() -> AppState {
+        let mut s = loaded();
+        s.on_response(&ApiReq::Status, Ok(status_v2()), 0);
+        s
+    }
+
+    #[test]
+    fn resolution_two_step_picker_stages_change() {
+        let mut s = loaded_v2();
+        s.nav(Nav::Select); // Display rows
+        assert_eq!(s.rows(), vec![RowKind::Resolution, RowKind::Scaling, RowKind::Overlay, RowKind::Hdr]);
+        assert_eq!(s.nav(Nav::Select), vec![]); // resolution list
+        let Some(Modal::List { kind: ListKind::Resolution, items, focus, .. }) = s.modals.last() else { panic!() };
+        assert_eq!(
+            items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+            ["3840x2160   (up to 30 Hz)", "1920x1080   (up to 120 Hz)", "1280x720   (up to 60 Hz)"]
+        );
+        assert_eq!(*focus, 1, "current 1080p focused");
+        // 1080p -> refresh list: Automatic (current), 120, 60
+        assert_eq!(s.nav(Nav::Select), vec![]);
+        let Some(Modal::List { kind: ListKind::Refresh(1920, 1080), items, focus, .. }) = s.modals.last() else { panic!() };
+        assert_eq!(
+            items.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(),
+            ["Automatic (fastest up to 60 Hz)", "120 Hz", "60 Hz"]
+        );
+        assert_eq!(*focus, 0);
+        s.nav(Nav::Back); // back to resolutions
+        assert!(matches!(s.modals.last(), Some(Modal::List { kind: ListKind::Resolution, .. })));
+        s.nav(Nav::Up); // 4K
+        s.nav(Nav::Select);
+        s.nav(Nav::Down); // 30 Hz
+        assert_eq!(s.nav(Nav::Select), vec![], "choosing only stages, nothing is sent");
+        assert!(s.modals.is_empty());
+        assert_eq!(s.changes.display, Some((3840, 2160, Some(30.0))));
+        assert!(s.row_pending(RowKind::Resolution));
+        assert_eq!(s.row_text(RowKind::Resolution).1, "1920x1080 at 60 Hz  →  3840x2160 at 30 Hz");
+    }
+
+    #[test]
+    fn apply_sends_only_changed_keys_once() {
+        let mut s = loaded_v2();
+        s.changes.density = Some(DensityValue::Dpi(320));
+        s.changes.timezone = Some("Europe/Berlin".into());
+        s.prune_changes();
+        assert_eq!(s.changes.count(), 2);
+        assert!(!s.changes.needs_restart());
+        assert_eq!(
+            s.changes.to_json(),
+            json!({"density": 320, "timezone": "Europe/Berlin"})
+        );
+        // X opens the confirm dialog with Cancel focused.
+        assert_eq!(s.nav(Nav::Apply), vec![]);
+        let Some(Modal::Confirm { focus: 0, body, action: ApiReq::Apply(c), .. }) = s.modals.last() else { panic!() };
+        assert!(body.contains("Scaling: 240 (suggested)  →  320"), "{body}");
+        assert!(body.contains("No restart needed"));
+        assert_eq!(c.count(), 2);
+        assert_eq!(s.nav(Nav::Select), vec![], "Cancel keeps the changes");
+        assert_eq!(s.changes.count(), 2);
+        s.nav(Nav::Apply);
+        s.nav(Nav::Right);
+        let fx = s.nav(Nav::Select);
+        let req = ApiReq::Apply(s.changes.clone());
+        assert_eq!(fx, vec![Effect::Request(req.clone())]);
+        let (m, path, body) = req.method_path_body();
+        assert_eq!((m, path.as_str()), ("POST", "/api/apply"));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&body.unwrap()).unwrap(),
+            json!({"density": 320, "timezone": "Europe/Berlin"})
+        );
+        // 400 keeps the pending changes.
+        s.on_response(&req, Err(ApiError::Http(400, "Unknown time zone".into())), 0);
+        assert_eq!(s.changes.count(), 2);
+        // Success clears them.
+        let fx = s.on_response(&req, Ok(json!({"ok": true, "applied": ["timezone", "density"], "restarting": false, "job": null})), 0);
+        assert!(s.changes.is_empty());
+        assert_eq!(fx, vec![Effect::Request(ApiReq::Status)]);
+        assert_eq!(s.banner.as_ref().unwrap().text, "Applied: timezone, density");
+    }
+
+    #[test]
+    fn restart_changes_and_toggles() {
+        let mut s = loaded_v2();
+        s.section = 1; // Android
+        s.nav(Nav::Select);
+        assert_eq!(s.nav(Nav::Select), vec![], "bottom bar toggle only stages");
+        assert_eq!(s.changes.navbar_hidden, Some(false));
+        s.nav(Nav::Select);
+        assert!(s.changes.is_empty(), "toggling back drops the change");
+        s.nav(Nav::Select);
+        s.changes.display = Some((3840, 2160, None));
+        assert!(s.changes.needs_restart());
+        s.nav(Nav::Apply);
+        let Some(Modal::Confirm { body, .. }) = s.modals.last() else { panic!() };
+        assert!(body.contains("Android restarts once"));
+        s.nav(Nav::Right);
+        let fx = s.nav(Nav::Select);
+        let Some(Effect::Request(req)) = fx.first().cloned() else { panic!() };
+        assert_eq!(
+            req.method_path_body().2.map(|b| serde_json::from_str::<serde_json::Value>(&b).unwrap()),
+            Some(json!({"display": {"width": 3840, "height": 2160, "refresh": null}, "navbar": "on"}))
+        );
+        s.on_response(&req, Ok(json!({"ok": true, "applied": ["display", "navbar"], "restarting": true, "job": {"id": "1-apply", "state": "running"}})), 0);
+        assert_eq!(s.blocking, Some(Blocking::Restarting));
+        assert!(s.changes.is_empty());
+    }
+
+    #[test]
+    fn pending_dropped_when_status_catches_up() {
+        let mut s = loaded_v2();
+        s.changes.density = Some(DensityValue::Dpi(320));
+        s.changes.overlay = Some(true);
+        let mut v = status_v2();
+        v["density"]["current"] = json!(320);
+        s.on_response(&ApiReq::Status, Ok(v), 0);
+        assert_eq!(s.changes.density, None);
+        assert_eq!(s.changes.overlay, Some(true));
+        // Manually clear changes (no Discard row in header anymore)
+        assert_eq!(s.click(Click::ApplyBtn), vec![]); // opens confirm dialog
+        s.nav(Nav::Back); // close without applying
+        s.changes = Changes::default();
+        s.prune_changes();
+        assert!(s.changes.is_empty());
+    }
+
+    #[test]
+    fn scaling_and_timezone_stage() {
+        let mut s = loaded_v2();
+        s.nav(Nav::Select);
+        s.nav(Nav::Down);
+        s.nav(Nav::Select);
+        let Some(Modal::List { items, focus, .. }) = s.modals.last() else { panic!() };
+        assert_eq!(items[*focus].label, "240 (suggested)");
+        s.nav(Nav::Down);
+        assert_eq!(s.nav(Nav::Select), vec![]);
+        assert_eq!(s.changes.density, Some(DensityValue::Dpi(320)));
+        // time zone two-level picker stages too
+        s.nav(Nav::NextSection);
+        s.nav(Nav::Down);
+        assert_eq!(s.nav(Nav::Select), vec![Effect::Request(ApiReq::Timezones)]);
+        s.on_response(
+            &ApiReq::Timezones,
+            Ok(json!({"ok": true, "timezones": ["America/New_York", "Europe/Berlin", "Europe/Paris"]})),
+            0,
+        );
+        s.nav(Nav::Down); // Europe
+        s.nav(Nav::Select);
+        assert_eq!(s.nav(Nav::Select), vec![]); // Berlin
+        assert_eq!(s.changes.timezone.as_deref(), Some("Europe/Berlin"));
+        assert_eq!(s.changes.count(), 2);
+    }
+
+    #[test]
+    fn hdr_row_and_info_dialog() {
+        let mut s = loaded_v2();
+        assert_eq!(s.row_text(RowKind::Hdr).1, "TV: HDR10, HLG · not available on this box");
+        s.nav(Nav::Select);
+        s.row = 3;
+        s.nav(Nav::Select);
+        let Some(Modal::Info { body, .. }) = s.modals.last() else { panic!() };
+        assert!(body.contains("HDR10, HLG") && body.contains("SDR only"));
+        s.nav(Nav::Back);
+        assert!(s.modals.is_empty());
+        // v1 agent: no hdr field
+        let s1 = loaded();
+        assert_eq!(s1.row_text(RowKind::Hdr).1, "Unknown");
+    }
+
+    #[test]
+    fn v1_agent_presets_fallback() {
+        let mut s = loaded();
+        s.nav(Nav::Select);
+        s.nav(Nav::Select);
+        let Some(Modal::List { items, .. }) = s.modals.last() else { panic!() };
+        assert_eq!(items.len(), 3);
+        s.nav(Nav::Down);
+        s.nav(Nav::Select);
+        assert_eq!(s.changes.display, Some((3840, 2160, None)));
+    }
+
+    #[test]
+    fn clicks() {
+        let mut s = loaded_v2();
+        s.click(Click::Section(3));
+        assert_eq!((s.section, s.pane), (3, Pane::Sections));
+        s.click(Click::Row(0));
+        assert!(matches!(s.modals.last(), Some(Modal::Confirm { .. })));
+        assert_eq!(s.click(Click::ModalItem(0)), vec![]);
+        assert!(s.modals.is_empty());
+        s.click(Click::Section(0));
+        s.click(Click::Row(1));
+        assert_eq!(s.click(Click::ModalItem(7)), vec![]);
+        assert_eq!(s.changes.density, Some(DensityValue::Reset));
+    }
+
 }

@@ -236,6 +236,8 @@ pub enum ApiReq {
     SetNavbar { visible: bool },
     SetOverlay { on: bool },
     SetTimezone(String),
+    /// API v2: several staged changes in one request (one Android restart at most).
+    Apply(Changes),
     UpdateCheck,
     UpdateRun,
     RestartAndroid,
@@ -247,6 +249,73 @@ pub enum DensityValue {
     Auto,
     Reset,
     Dpi(i64),
+}
+
+impl DensityValue {
+    pub fn to_json(&self) -> serde_json::Value {
+        match self {
+            DensityValue::Auto => serde_json::json!("auto"),
+            DensityValue::Reset => serde_json::json!("reset"),
+            DensityValue::Dpi(n) => serde_json::json!(n),
+        }
+    }
+}
+
+/// Staged settings changes; `None` = unchanged.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Changes {
+    /// (width, height, refresh); refresh None = automatic (fastest up to 60 Hz).
+    pub display: Option<(i64, i64, Option<f64>)>,
+    pub density: Option<DensityValue>,
+    /// true = bottom bar hidden.
+    pub navbar_hidden: Option<bool>,
+    pub overlay: Option<bool>,
+    pub timezone: Option<String>,
+}
+
+impl Changes {
+    pub fn is_empty(&self) -> bool {
+        self.count() == 0
+    }
+    pub fn count(&self) -> usize {
+        [
+            self.display.is_some(),
+            self.density.is_some(),
+            self.navbar_hidden.is_some(),
+            self.overlay.is_some(),
+            self.timezone.is_some(),
+        ]
+        .iter()
+        .filter(|b| **b)
+        .count()
+    }
+    /// Changing these restarts Android.
+    pub fn needs_restart(&self) -> bool {
+        self.display.is_some() || self.navbar_hidden.is_some() || self.overlay.is_some()
+    }
+    /// JSON body for POST /api/apply: only the changed keys.
+    pub fn to_json(&self) -> serde_json::Value {
+        let mut m = serde_json::Map::new();
+        if let Some((w, h, r)) = self.display {
+            m.insert(
+                "display".into(),
+                serde_json::json!({"width": w, "height": h, "refresh": r}),
+            );
+        }
+        if let Some(d) = &self.density {
+            m.insert("density".into(), d.to_json());
+        }
+        if let Some(hidden) = self.navbar_hidden {
+            m.insert("navbar".into(), serde_json::json!(if hidden { "off" } else { "on" }));
+        }
+        if let Some(on) = self.overlay {
+            m.insert("overlay".into(), serde_json::json!(if on { "on" } else { "off" }));
+        }
+        if let Some(tz) = &self.timezone {
+            m.insert("timezone".into(), serde_json::json!(tz));
+        }
+        serde_json::Value::Object(m)
+    }
 }
 
 impl ApiReq {
@@ -262,12 +331,9 @@ impl ApiReq {
                 "/api/display".into(),
                 Some(json!({"width": width, "height": height}).to_string()),
             ),
+            ApiReq::Apply(c) => ("POST", "/api/apply".into(), Some(c.to_json().to_string())),
             ApiReq::SetDensity(v) => {
-                let value = match v {
-                    DensityValue::Auto => json!("auto"),
-                    DensityValue::Reset => json!("reset"),
-                    DensityValue::Dpi(n) => json!(n),
-                };
+                let value = v.to_json();
                 (
                     "POST",
                     "/api/density".into(),

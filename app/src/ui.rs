@@ -3,7 +3,7 @@
 //! on a 1080p TV). Focus comes from `AppState`, never from egui.
 
 use crate::model::{human_duration, short_time};
-use crate::state::{AppState, Blocking, Click, Conn, Modal, Pane, Section};
+use crate::state::{AppState, Blocking, Click, Conn, Modal, Pane, RowKind, Section};
 use egui::{
     Align, Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2,
     pos2, vec2,
@@ -194,6 +194,8 @@ pub fn draw(ui: &mut Ui, st: &mut AppState) -> Vec<Click> {
     // Footer hint
     let hint = if modal_open {
         "Up/Down/Left/Right: move     A / OK: select     B / Back: close"
+    } else if !st.changes.is_empty() {
+        "D-pad: move     A / OK: select     B / Back: back     L1 / R1: section     X: apply changes"
     } else {
         "D-pad: move     A / OK: select     B / Back: back     L1 / R1: section     Y: refresh"
     };
@@ -231,10 +233,11 @@ pub fn draw(ui: &mut Ui, st: &mut AppState) -> Vec<Click> {
     clicks
 }
 
-fn draw_header(ui: &Ui, st: &AppState, screen: Rect) {
+fn draw_header(ui: &Ui, st: &AppState, screen: Rect) -> Option<Rect> {
     let h = Rect::from_min_size(screen.min, vec2(screen.width(), 58.0));
     let p = ui.painter();
     p.rect_filled(h, 0.0, HEADER_BG);
+    let mut apply_btn: Option<Rect> = None;
     let title = p.text(
         pos2(24.0, h.center().y),
         Align2::LEFT_CENTER,
@@ -272,7 +275,35 @@ fn draw_header(ui: &Ui, st: &AppState, screen: Rect) {
             p.galley(br.min + vec2(12.0, 5.0), g, Color32::BLACK);
         }
     }
-    let _ = x;
+    let n = st.changes.count();
+    let mut apply_btn = None;
+    if n > 0 {
+        let text = format!("{n} change{} pending", if n == 1 { "" } else { "s" });
+        let g = p.layout_no_wrap(text, font(SMALL), Color32::BLACK);
+        let br = Rect::from_min_size(
+            pos2(x + 150.0, h.center().y - g.size().y / 2.0 - 5.0),
+            g.size() + vec2(24.0, 10.0),
+        );
+        p.rect_filled(br, r(12.0), WARN);
+        p.galley(br.min + vec2(12.0, 5.0), g, Color32::BLACK);
+        
+        // Apply button in top right
+        let btn_rect = Rect::from_min_size(
+            pos2(screen.right() - 120.0, h.top() + 10.0),
+            vec2(110.0, 38.0),
+        );
+        let (bg, outline) = (FOCUS_BG, FOCUS);
+        p.rect_filled(btn_rect, r(8.0), bg);
+        p.rect_stroke(btn_rect, r(8.0), Stroke::new(2.0, outline), StrokeKind::Outside);
+        p.text(
+            btn_rect.center(),
+            Align2::CENTER_CENTER,
+            "Apply",
+            font(BODY),
+            Color32::WHITE,
+        );
+        apply_btn = Some(btn_rect);
+    }
     if let Some(pending) = &st.pending {
         p.text(
             pos2(screen.right() - 24.0, h.center().y),
@@ -290,6 +321,7 @@ fn draw_header(ui: &Ui, st: &AppState, screen: Rect) {
             ACCENT,
         );
     }
+    apply_btn
 }
 
 fn info_lines(st: &AppState, sec: Section) -> Vec<(String, String)> {
@@ -368,6 +400,7 @@ fn info_lines(st: &AppState, sec: Section) -> Vec<(String, String)> {
 }
 
 fn draw_main(ui: &mut Ui, st: &AppState, screen: Rect, interactive: bool, clicks: &mut Vec<Click>) {
+    let apply_btn = draw_header(ui, st, screen);
     let top = 82.0;
     // Left column: sections
     for (i, sec) in Section::ALL.iter().enumerate() {
@@ -415,15 +448,27 @@ fn draw_main(ui: &mut Ui, st: &AppState, screen: Rect, interactive: bool, clicks
         }
         y += 10.0;
     }
-    for (i, kind) in st.rows().into_iter().enumerate() {
-        let rect = Rect::from_min_size(pos2(x0, y), vec2(w, 58.0));
+    let rows = st.rows();
+    // Fit every row above the footer: shrink the spacing when there are many.
+    let avail = screen.bottom() - 44.0 - y;
+    let pitch = (avail / rows.len().max(1) as f32).clamp(50.0, 70.0);
+    let row_h = pitch - 10.0;
+    for (i, kind) in rows.into_iter().enumerate() {
+        let rect = Rect::from_min_size(pos2(x0, y), vec2(w, row_h));
         let (name, value) = st.row_text(kind);
         let focused = st.pane == Pane::Rows && st.row == i;
-        item(ui, rect, &name, &value, focused, false, true, ACCENT);
+        let color = if st.row_pending(kind) { WARN } else { ACCENT };
+        item(ui, rect, &name, &value, focused, false, true, color);
         if clicked(ui, rect, ("row", sec.title(), i), interactive) {
             clicks.push(Click::Row(i));
         }
-        y += 70.0;
+        y += pitch;
+    }
+    // Header Apply button
+    if let Some(btn) = apply_btn {
+        if clicked(ui, btn, "apply_btn", interactive) {
+            clicks.push(Click::ApplyBtn);
+        }
     }
 }
 
@@ -506,6 +551,27 @@ fn draw_modal(
             }
             if clicked(ui, ok, "m_ok", true) {
                 clicks.push(Click::ModalItem(1));
+            }
+        }
+        Modal::Info { title, body } => {
+            let w = 700.0;
+            let tg = p.layout(title.clone(), font(TITLE - 2.0), Color32::WHITE, w - 60.0);
+            let bg = p.layout(body.clone(), font(BODY), TEXT, w - 60.0);
+            let h = 30.0 + tg.size().y + 16.0 + bg.size().y + 34.0 + 58.0 + 30.0;
+            let rect = Rect::from_center_size(screen.center(), vec2(w, h));
+            p.rect_filled(rect, r(16.0), HEADER_BG);
+            p.rect_stroke(rect, r(16.0), Stroke::new(1.0, DIM), StrokeKind::Inside);
+            let mut y = rect.top() + 30.0;
+            let th = tg.size().y;
+            p.galley(pos2(rect.left() + 30.0, y), tg, Color32::WHITE);
+            y += th + 16.0;
+            let bh = bg.size().y;
+            p.galley(pos2(rect.left() + 30.0, y), bg, TEXT);
+            y += bh + 34.0;
+            let ok = Rect::from_min_size(pos2(rect.center().x - 115.0, y), vec2(230.0, 58.0));
+            button(ui, ok, "OK", true);
+            if clicked(ui, ok, "m_info_ok", true) {
+                clicks.push(Click::ModalItem(0));
             }
         }
         Modal::List {

@@ -33,7 +33,7 @@ install. Run it again later to add only what is new.
 | **Aurora Store** | Optional (the installer asks): open-source Google Play client, from F-Droid |
 | **Remote screen** | See and control Android from a PC with scrcpy, through an SSH tunnel |
 | **Notifications** | Android notification when a new script version, Debian updates or a reboot is waiting |
-| **Low RAM (4 GB)** | zram + swap file, bigger app memory limit, Android protected from the OOM killer, kiosk restarts by itself, `waytv-crashlog` explains crashes |
+| **Low resources** | Detects low-RAM/low-CPU boxes and says so; then: zram + swap file, bigger app memory limit, Android protected from the OOM killer, kiosk restarts by itself, `waytv-crashlog` explains crashes |
 | **OS tuning** | zram swap, journal size cap, no suspend, quiet fast boot, unneeded services off |
 | **Settings app** | **WayTV Settings**, an Android app made for a TV remote or game controller: resolution, scaling, bottom bar, overlay, time zone, updates, restart, reboot |
 | **Settings menu** | `sudo waytv-settings`: text menu on Ctrl+Alt+F2 |
@@ -44,8 +44,30 @@ install. Run it again later to add only what is new.
 
 ## Requirements
 
-- x86_64 PC (tested on a CN60 mini PC: Celeron 2955U, Haswell graphics, 4 GB RAM)
-- Debian 13 "trixie", minimal install (no desktop needed)
+### Minimum and recommended specs
+
+| | Minimum | Recommended |
+|---|---|---|
+| **CPU** | x86_64, 2 cores (e.g. Celeron 2955U) | 4 cores or more (e.g. Intel N100, Core i3 8th gen, Ryzen 3) |
+| **RAM** | 4 GB | 8 GB or more |
+| **Storage** | 16 GB free (Waydroid image is 1-2 GB, plus apps and a 4 GB swap file) | SSD with 32 GB free or more |
+| **GPU** | Intel HD (Haswell, 4th gen) or AMD with Mesa drivers | Intel UHD 600 or newer, AMD Vega/RDNA |
+| **Video out** | HDMI 1.4: 1080p at 60 Hz (4K only at 30 Hz) | HDMI 2.0: 4K at 60 Hz |
+| **OS** | Debian 13 "trixie", minimal install | same |
+
+- **NVIDIA GPUs are not supported**: Waydroid needs Mesa (Intel/AMD) drivers.
+- Tested on a CN60 mini PC (Celeron 2955U, Haswell graphics, 4 GB RAM): 1080p at 60 Hz
+  is smooth, 4K runs at 30 Hz with the GPU near its limit.
+
+**Low-resource alert:** the setup script checks the hardware at every run. Below 8 GB of RAM
+or with fewer than 4 cores it prints `LOW RESOURCES DETECTED` and applies the low-memory
+optimizations (zram at 100% of RAM, a 4 GB swap file, memory settings that swap idle apps
+instead of closing them, OOM protection for Android). Below the minimum it also prints
+`BELOW THE MINIMUM SPECS` with the reason, and continues. Recommended hardware gets standard
+tuning (zram at 50%, no swap file). The result is saved in `/etc/waytv/hardware`.
+
+### Also needed
+
 - A normal user account with `sudo`
 - A kernel with **binder** support (`binder_linux` module or binderfs). Debian's stock kernel has it
 - Internet access. The first Waydroid download is about 1-2 GB
@@ -168,13 +190,21 @@ updates it by hand) and shows up in the app drawer and in Android TV launchers.
 
 | Section | What you can do |
 |---|---|
-| **Display** | Resolution (1080p/4K/720p, HDMI follows), scaling (DPI), performance overlay |
+| **Display** | Resolution and refresh rate (every mode the TV offers, e.g. 4K at 60 Hz or 1080p at 120 Hz where the hardware allows), scaling (DPI), performance overlay, HDR status |
 | **Android** | Hide/show the bottom bar, time zone, restart Android |
 | **Updates** | See what is waiting, check now, update everything (script, Debian, Android, the app) with a live log |
 | **System** | IP address, SSH, uptime, live FPS/CPU/RAM/GPU, reboot the box |
 
+**Changes are staged, then applied together:** picking a value marks it as pending
+(`current → new`). **Apply** sends all pending changes at once and restarts Android at most
+once; **Discard** drops them.
+
 **Controller:** D-pad / left stick to move, **A** to select, **B** to go back,
 **LB/RB** to switch sections, **Y** to refresh.
+
+**HDR:** the app shows whether the TV supports HDR (read from its EDID) and why the box
+cannot output it yet: Waydroid draws Android in SDR only, and Debian 13's screen library
+(wlroots 0.18) has no HDR output. No HDR switch until both support it.
 
 ### How it talks to the box
 
@@ -250,6 +280,9 @@ sudo waytv-settings
 ---
 
 ## Resolution and smoothness
+
+`/etc/waytv/display.conf` holds `WIDTH`, `HEIGHT` and optionally `REFRESH` (set from the app).
+Without `REFRESH` the fastest rate up to 60 Hz is used; with it, that exact rate (e.g. 120).
 
 The kiosk switches the **HDMI output** to the resolution in `/etc/waytv/display.conf`, at the
 fastest refresh rate the TV offers **up to 60 Hz** (`wlr-randr`). Before v17 only Android's size

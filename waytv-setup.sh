@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION=18              # bump when the script changes
+SCRIPT_VERSION=19              # bump when the script changes
 STATE=/etc/waytv
 MARK=$STATE/installed          # present once a full install finished
 STEPS=$STATE/steps             # one file per one-time step, holding the step version
@@ -209,6 +209,62 @@ check_platform() {
     . /etc/os-release
     [[ "${ID:-}" == debian && "${VERSION_ID:-}" == 13 ]] || \
         warn "Expected Debian 13, found ${PRETTY_NAME:-unknown}. Continuing."
+}
+
+# ---- Hardware check (always): compare with the minimum/recommended specs (README) and
+# pick the tuning profile. LOW_RESOURCES=1 turns on the low-memory optimizations.
+#   minimum:     2 CPU cores, 4 GB RAM, 16 GB free disk, Intel/AMD GPU with Mesa drivers
+#   recommended: 4 CPU cores, 8 GB RAM, SSD with 32 GB free, Intel UHD 600+/AMD Vega or newer
+LOW_RESOURCES=0
+check_resources() {
+    local ram_mb cores disk_gb cpu gpu drv below=() low=() line
+    log "Checking the hardware"
+    ram_mb=$(awk '/^MemTotal:/ {print int($2 / 1024)}' /proc/meminfo)
+    cores=$(nproc)
+    disk_gb=$(df --output=avail -BG / 2>/dev/null | tail -n1 | tr -dc 0-9)
+    cpu=$(sed -n 's/^model name[[:space:]]*: //p' /proc/cpuinfo | head -n1)
+    drv=$(basename "$(readlink -f /sys/class/drm/card0/device/driver 2>/dev/null)" 2>/dev/null)
+    gpu=$(lspci 2>/dev/null | sed -n 's/^.*\(VGA compatible controller\|Display controller\|3D controller\): //p' | head -n1)
+
+    # 4 GB boxes report about 3.7 GB, so the thresholds sit a little lower.
+    (( ram_mb < 3400 )) && below+=("RAM: $((ram_mb / 1024)).$(( ram_mb % 1024 * 10 / 1024 )) GB (minimum 4 GB)")
+    (( cores < 2 )) && below+=("CPU: $cores core (minimum 2)")
+    [[ ! -e $MARK ]] && (( ${disk_gb:-0} < 16 )) && below+=("Disk: ${disk_gb:-?} GB free (minimum 16 GB)")
+    case "$drv" in
+        i915|xe|amdgpu|radeon|virtio-pci|virtio_gpu) ;;
+        nvidia*) below+=("GPU: NVIDIA's driver ($drv) does not work with Waydroid; use an Intel or AMD GPU") ;;
+        "") below+=("GPU: no graphics driver found (/dev/dri missing)") ;;
+        *) warn "GPU driver '$drv' is untested with Waydroid; Android may not start." ;;
+    esac
+    (( ram_mb < 7000 )) && low+=("RAM under 8 GB")
+    (( cores < 4 )) && low+=("fewer than 4 CPU cores")
+
+    echo "  CPU:  ${cpu:-unknown} ($cores cores)"
+    echo "  RAM:  $((ram_mb / 1024)).$(( ram_mb % 1024 * 10 / 1024 )) GB"
+    echo "  GPU:  ${gpu:-unknown} (driver: ${drv:-none})"
+    echo "  Disk: ${disk_gb:-?} GB free on /"
+    if (( ${#below[@]} )); then
+        echo
+        echo "  !!! BELOW THE MINIMUM SPECS - Android may be very slow or not start:"
+        for line in "${below[@]}"; do echo "  !!!   - $line"; done
+        echo "  !!! Continuing anyway; see 'Requirements' in the README."
+    fi
+    if (( ${#below[@]} || ${#low[@]} )); then
+        LOW_RESOURCES=1
+        echo
+        local why
+        why=$(IFS=,; echo "${low[*]:-below minimum}"); why=${why//,/, }
+        echo "  *** LOW RESOURCES DETECTED ($why): applying optimizations:"
+        echo "  ***   - compressed RAM swap (zram) at 100% of RAM + a ${SWAP_GB} GB swap file on disk"
+        echo "  ***   - memory settings that swap idle apps instead of closing them"
+        echo "  ***   - Android and the kiosk protected from the out-of-memory killer"
+        echo "  ***   - 1080p at 60 Hz by default (4K costs a lot of GPU and memory)"
+    else
+        echo "  Hardware meets the recommended specs: standard tuning (zram at 50%, no swap file)."
+    fi
+    mkdir -p "$STATE"
+    printf 'RAM_MB=%s\nCORES=%s\nGPU_DRIVER=%s\nLOW_RESOURCES=%s\n' \
+        "$ram_mb" "$cores" "${drv:-none}" "$LOW_RESOURCES" > "$STATE/hardware"
 }
 
 # ---------------------------------------------------------------- uninstall
@@ -599,9 +655,13 @@ tune_memory() {
     # Existing installs keep the swap file they already have (older versions used /cn60.swap).
     local SWAPFILE
     SWAPFILE=$(cat "$STATE/swapfile" 2>/dev/null || true); SWAPFILE=${SWAPFILE:-/waytv.swap}
-    log "Checking low-memory tuning (4 GB RAM)"
+    if [[ $LOW_RESOURCES -eq 1 ]]; then
+        log "Checking low-memory tuning (low resources detected)"
+    else
+        log "Checking memory tuning (standard)"
+    fi
     put_file /etc/sysctl.d/90-waytv.conf 644 <<'EOF'
-# WayTV kiosk memory tuning for 4 GB RAM (removed by waytv-setup.sh --uninstall)
+# WayTV kiosk memory tuning (removed by waytv-setup.sh --uninstall)
 # zram swap is fast, so move idle memory there early instead of killing apps.
 vm.swappiness=150
 vm.page-cluster=0
@@ -617,15 +677,17 @@ EOF
         local before
         before="$(cat /etc/default/zramswap)"
         set_kv /etc/default/zramswap ALGO zstd
-        set_kv /etc/default/zramswap PERCENT 100
+        local zpct=50
+        [[ $LOW_RESOURCES -eq 1 ]] && zpct=100
+        set_kv /etc/default/zramswap PERCENT "$zpct"
         set_kv /etc/default/zramswap PRIORITY 100
         systemctl enable zramswap.service >/dev/null 2>&1 || true
         if ! swapon --show=NAME --noheadings | grep -q zram; then
-            systemctl restart zramswap.service && CHANGES+=("zram swap on (100% of RAM, zstd)") \
+            systemctl restart zramswap.service && CHANGES+=("zram swap on (${zpct}% of RAM, zstd)") \
                 || warn "zram swap did not start; continuing."
         elif [[ "$before" != "$(cat /etc/default/zramswap)" ]]; then
             # Restarting zram now would pull everything swapped back into RAM at once.
-            CHANGES+=("zram swap resized to 100% of RAM (applies after reboot)")
+            CHANGES+=("zram swap resized to ${zpct}% of RAM (applies after reboot)")
         fi
     else
         warn "zram-tools config missing; skipping zram swap."
@@ -634,6 +696,8 @@ EOF
     # Swap file on disk: used only when zram is full (lower priority).
     if swapon --show=NAME --noheadings | grep -qx "$SWAPFILE"; then
         :
+    elif [[ $LOW_RESOURCES -eq 0 && ! -f $SWAPFILE ]]; then
+        :   # enough RAM: no swap file needed
     elif [[ -f $SWAPFILE ]]; then
         swapon -p 10 "$SWAPFILE" 2>/dev/null || warn "Could not enable $SWAPFILE."
     else
@@ -734,7 +798,7 @@ apply_resolution() {
     mkdir -p /etc/waytv
     touch "$CONF"
     # Keep the other settings in the file (OVERLAY=...); only replace the size.
-    sed -i '/^WIDTH=/d; /^HEIGHT=/d' "$CONF"
+    sed -i '/^WIDTH=/d; /^HEIGHT=/d; /^REFRESH=/d' "$CONF"
     printf 'WIDTH=%s\nHEIGHT=%s\n' "$w" "$h" >> "$CONF"
     [[ -x /usr/local/bin/waytv-tweaks ]] && /usr/local/bin/waytv-tweaks density-follow >/dev/null 2>&1
     waydroid prop set persist.waydroid.width "$w" || true
@@ -1342,6 +1406,7 @@ overlay_on() {
     fi
     set_overlay 1
     systemctl enable --now waytv-perf.service
+    [[ -n ${WAYTV_NO_RESTART:-} ]] && return 0     # the caller restarts Android once
     systemctl restart waydroid-kiosk.service
     echo "Overlay on. Android's screen comes back in about a minute with the numbers top right."
 }
@@ -1349,6 +1414,7 @@ overlay_on() {
 overlay_off() {
     set_overlay 0
     systemctl disable --now waytv-perf.service 2>/dev/null
+    [[ -n ${WAYTV_NO_RESTART:-} ]] && return 0
     systemctl restart waydroid-kiosk.service
     echo "Overlay off. Android's screen comes back in about a minute."
 }
@@ -1395,7 +1461,7 @@ import time
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-API = 1
+API = 2
 PORT = 8765
 STATE = "/etc/waytv"
 TOKEN_FILE = f"{STATE}/agent.token"
@@ -1493,6 +1559,57 @@ def wlr_modes():
 def best_refresh(modes, w, h):
     rates = [r for (mw, mh, r) in modes if (mw, mh) == (w, h) and r <= 60.5]
     return max(rates) if rates else None
+
+
+def mode_list(modes, current):
+    """Every resolution/refresh the TV offers, biggest first, duplicates removed."""
+    seen, out = set(), []
+    for (w, h, r) in sorted(modes, key=lambda m: (-m[0] * m[1], -m[2])):
+        key = (w, h, round(r, 2))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"width": w, "height": h, "refresh": round(r, 3),
+                    "label": f"{w}x{h} at {r:.2f}".rstrip("0").rstrip(".") + " Hz",
+                    "current": current is not None and (w, h) == current[:2] and abs(r - current[2]) < 0.01})
+    return out
+
+
+def tv_hdr_formats():
+    """HDR formats the connected TV announces in its EDID (CTA-861 HDR static metadata)."""
+    import glob
+    for path in glob.glob("/sys/class/drm/card*-*/edid"):
+        try:
+            if read_file(os.path.dirname(path) + "/status") != "connected":
+                continue
+            with open(path, "rb") as f:
+                d = f.read()
+        except OSError:
+            continue
+        for b in range(1, len(d) // 128):
+            blk = d[b * 128:(b + 1) * 128]
+            if blk[0] != 0x02:
+                continue
+            i, end = 4, blk[2]
+            while i < end and i < 127:
+                tag, ln = blk[i] >> 5, blk[i] & 31
+                if tag == 7 and ln >= 2 and blk[i + 1] == 6:
+                    eotf = blk[i + 2]
+                    return [n for bit, n in ((2, "HDR10"), (3, "HLG")) if eotf & (1 << bit)]
+                i += ln + 1
+        return []
+    return []
+
+
+def hdr_info():
+    tv = tv_hdr_formats()
+    reasons = ["Waydroid draws Android in SDR only: Android apps cannot send HDR video to the TV through it."]
+    rc, out = run(["dpkg-query", "-W", "-f=${Package} ", "libwlroots-0.18", "libwlroots-0.19"], 10)
+    if "libwlroots-0.19" not in out:
+        reasons.append("The screen program (wlroots 0.18 in Debian 13) has no HDR output.")
+    if not tv:
+        reasons.insert(0, "The TV does not announce HDR support.")
+    return {"tv": tv, "available": False, "reasons": reasons}
 
 
 def delayed(seconds, cmd):
@@ -1640,7 +1757,10 @@ def status():
         "hostname": os.uname().nodename, "ips": ips,
         "ssh": run(["systemctl", "is-active", "ssh.service"], 10)[1] or "unknown",
         "user": kiosk_user(), "uptime_s": uptime, "android_running": up,
-        "display": {"width": w, "height": h, "refresh": current[2] if current else None, "presets": presets},
+        "display": {"width": w, "height": h, "refresh": current[2] if current else None,
+                    "refresh_setting": float(conf["REFRESH"]) if re.fullmatch(r"[\d.]+", conf.get("REFRESH", "")) else None,
+                    "modes": mode_list(modes, current), "presets": presets},
+        "hdr": hdr_info(),
         "density": density, "navbar": navbar,
         "overlay": "on" if conf.get("OVERLAY") == "1" else "off",
         "timezone": {"android": timezone_android,
@@ -1674,37 +1794,72 @@ def need_android():
         raise ApiError(503, "Android is still starting. Try again in a minute.")
 
 
-def set_display(body):
+def check_display(body):
+    """Validate {"width","height","refresh"?}; returns (w, h, refresh or None)."""
     try:
         w, h = int(body.get("width")), int(body.get("height"))
+        r = body.get("refresh")
+        r = None if r in (None, "", "auto") else float(r)
     except (TypeError, ValueError):
-        raise ApiError(400, "width and height must be numbers.")
-    if (w, h) not in [(pw, ph) for _, pw, ph in PRESETS]:
+        raise ApiError(400, "width, height and refresh must be numbers.")
+    modes, _ = wlr_modes()
+    if modes:
+        rates = [mr for (mw, mh, mr) in modes if (mw, mh) == (w, h)]
+        if not rates:
+            raise ApiError(400, f"The TV does not offer {w}x{h}.")
+        if r is not None and not any(abs(mr - r) < 0.05 for mr in rates):
+            raise ApiError(400, f"The TV does not offer {w}x{h} at {r:g} Hz.")
+    elif (w, h) not in [(pw, ph) for _, pw, ph in PRESETS]:
         raise ApiError(400, "That resolution is not one of the choices.")
+    return w, h, r
+
+
+def write_display(w, h, r):
     set_env_keys(DISPLAY_CONF, {"WIDTH": w, "HEIGHT": h})
+    if r is None:
+        conf = read_env(DISPLAY_CONF)
+        if "REFRESH" in conf:     # back to "fastest up to 60 Hz"
+            lines = [l for l in read_file(DISPLAY_CONF).splitlines() if not l.startswith("REFRESH=")]
+            with open(DISPLAY_CONF + ".waytvnew", "w") as f:
+                f.write("\n".join(lines) + "\n")
+            os.replace(DISPLAY_CONF + ".waytvnew", DISPLAY_CONF)
+    else:
+        set_env_keys(DISPLAY_CONF, {"REFRESH": f"{r:g}"})
+
+
+def set_display(body):
+    w, h, r = check_display(body)
+    write_display(w, h, r)
     if android_up():
         run([f"{BIN}/waytv-tweaks", "density-follow"], 60)
     restart_android_soon()
     return {"ok": True, "restarting": True}
 
 
-def set_density(body):
-    v = body.get("value")
+def check_density(v):
     if isinstance(v, str) and v in ("auto", "reset"):
-        arg = v
-    else:
-        try:
-            arg = str(int(v))
-        except (TypeError, ValueError):
-            raise ApiError(400, "value must be a number from 100 to 800, 'auto' or 'reset'.")
-        if not 100 <= int(arg) <= 800:
-            raise ApiError(400, "value must be from 100 to 800.")
-    need_android()
+        return v
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        raise ApiError(400, "Scaling must be a number from 100 to 800, 'auto' or 'reset'.")
+    if not 100 <= n <= 800:
+        raise ApiError(400, "Scaling must be from 100 to 800.")
+    return str(n)
+
+
+def apply_density(arg):
     rc, out = run([f"{BIN}/waytv-tweaks", "density", arg], 60)
     if rc != 0:
         raise ApiError(500, out or "Could not change the scaling.")
     m = re.search(r"(\d+) dpi", out)
-    return {"ok": True, "density": int(m.group(1)) if m else None}
+    return int(m.group(1)) if m else None
+
+
+def set_density(body):
+    arg = check_density(body.get("value"))
+    need_android()
+    return {"ok": True, "density": apply_density(arg)}
 
 
 def set_navbar(body):
@@ -1743,6 +1898,70 @@ def set_timezone(body):
     if android_up():
         run([f"{BIN}/waytv-tweaks", "timezone", tz], 60)
     return {"ok": True, "tz": tz}
+
+
+def navbar_hidden():
+    cfg = read_file("/var/lib/waydroid/waydroid.cfg")
+    return re.search(r"^qemu\.hw\.mainkeys\s*=\s*1\s*$", cfg, re.M) is not None
+
+
+def apply_all(body):
+    """Apply several settings at once, with at most one Android restart.
+
+    Body (every key optional): {"display": {"width","height","refresh"}, "density": n|"auto"|"reset",
+    "navbar": "on"|"off", "overlay": "on"|"off", "timezone": "Area/City"}
+    """
+    # 1. Check everything before changing anything.
+    disp = check_display(body["display"]) if body.get("display") else None
+    dens = check_density(body["density"]) if body.get("density") is not None else None
+    nav = body.get("navbar")
+    if nav is not None and nav not in ("on", "off"):
+        raise ApiError(400, "navbar must be 'on' or 'off'.")
+    ov = body.get("overlay")
+    if ov is not None and ov not in ("on", "off"):
+        raise ApiError(400, "overlay must be 'on' or 'off'.")
+    tz = body.get("timezone")
+    if tz is not None and tz not in timezones():
+        raise ApiError(400, f"Unknown time zone: {tz}")
+    if dens is not None:
+        need_android()
+    if running_job():
+        raise ApiError(409, f"Another task is running: {running_job()['title']}")
+
+    conf = read_env(DISPLAY_CONF)
+    applied, restart, cmds = [], False, []
+    # 2. Changes that apply at once.
+    if tz is not None:
+        set_timezone({"tz": tz})
+        applied.append("timezone")
+    if disp is not None:
+        w, h, r = disp
+        cur_r = conf.get("REFRESH")
+        if (str(w), str(h)) != (conf.get("WIDTH"), conf.get("HEIGHT")) or (r is None) != (cur_r is None) \
+                or (r is not None and abs(r - float(cur_r)) > 0.01):
+            write_display(w, h, r)
+            applied.append("display")
+            restart = True
+    if dens is not None:
+        apply_density(dens)
+        applied.append("density")
+    elif "display" in applied and android_up():
+        run([f"{BIN}/waytv-tweaks", "density-follow"], 60)
+    # 3. Changes that need Android to restart: one task, one restart.
+    if ov is not None and ov != ("on" if conf.get("OVERLAY") == "1" else "off"):
+        cmds.append(f"WAYTV_NO_RESTART=1 {BIN}/waytv-perf overlay {ov}")
+        applied.append("overlay")
+        restart = True
+    if nav is not None and (nav == "off") != navbar_hidden():
+        cmds.append(f"{BIN}/waytv-tweaks navbar {nav}")      # restarts Android itself
+        applied.append("navbar")
+        restart = True
+    elif restart:
+        cmds.append("systemctl restart waydroid-kiosk.service")
+    job = None
+    if cmds:
+        job = start_job("apply", "Apply settings", "sleep 2; " + "; ".join(cmds))
+    return {"ok": True, "applied": applied, "restarting": restart, "job": job}
 
 
 # ------------------------------------------------------------------ pairing
@@ -1873,6 +2092,7 @@ class Handler(BaseHTTPRequestHandler):
             elif method == "POST":
                 body = self.body()
                 routes = {
+                    "/api/apply": lambda: apply_all(body),
                     "/api/display": lambda: set_display(body),
                     "/api/density": lambda: set_density(body),
                     "/api/navbar": lambda: set_navbar(body),
@@ -2486,11 +2706,16 @@ WIDTH="${WIDTH:-1920}"; HEIGHT="${HEIGHT:-1080}"
 # box) and only scales Android up, which is both blurry and choppy.
 set_hdmi_mode() {
     command -v wlr-randr >/dev/null 2>&1 || return 0
-    best=$(wlr-randr 2>/dev/null | awk -v want="${WIDTH}x${HEIGHT}" '
+    # REFRESH in display.conf (chosen in the WayTV Settings app) picks that exact rate;
+    # without it the fastest rate up to 60 Hz is used.
+    best=$(wlr-randr 2>/dev/null | awk -v want="${WIDTH}x${HEIGHT}" -v pick="${REFRESH:-0}" '
         /^[^ ]/ { if (out != "") exit; out = $1; next }
         $1 == want && $2 == "px," {
             r = $3 + 0
-            if (r <= 60.5 && r > rate) rate = r
+            if (pick > 0) {
+                d = r - pick; if (d < 0) d = -d
+                if (rate == 0 || d < bestd) { rate = r; bestd = d }
+            } else if (r <= 60.5 && r > rate) rate = r
         }
         END { if (out != "" && rate > 0) printf "%s %s@%f\n", out, want, rate }')
     [ -n "$best" ] || return 0
@@ -2627,6 +2852,7 @@ EOF
 
 do_install() {
     check_platform
+    check_resources
     # Earlier versions booted without systemd-user-sessions, leaving /run/nologin behind.
     systemctl start systemd-user-sessions.service 2>/dev/null || true
     local kiosk_was_active=0 prev="none"
