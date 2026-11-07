@@ -923,7 +923,7 @@ menu_tweaks() {
     while true; do
         choice=$(whiptail --title "TV tweaks" --menu "$(/usr/local/bin/waytv-tweaks status 2>&1 | head -n 4)" 21 74 8 \
             all      "Do all of the below (recommended for a TV)" \
-            apps     "Hide phone apps (Clock, Contacts, Music, Camera...)" \
+            apps     "Hide phone apps (Clock, Contacts, Music, Camera, Browser...)" \
             restore  "Bring the hidden apps back" \
             scale    "Size of text and icons (scaling)" \
             navbar   "Hide or show the bottom bar" \
@@ -1013,7 +1013,7 @@ KUSER="$(cat /etc/waytv/user 2>/dev/null || echo tv)"
 # user only: they stay in the Android image and "waytv-tweaks apps-restore" brings them back.
 APPS=(com.android.deskclock:Clock com.android.contacts:Contacts org.lineageos.eleven:Music
       org.lineageos.recorder:Recorder com.android.calculator2:Calculator
-      org.lineageos.etar:Calendar org.lineageos.aperture:Camera)
+      org.lineageos.etar:Calendar org.lineageos.aperture:Camera org.lineageos.jelly:Browser)
 
 ash() { waydroid shell -- "$@" 2>&1 | tr -d '\r'; }
 
