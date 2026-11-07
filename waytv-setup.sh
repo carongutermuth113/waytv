@@ -2923,7 +2923,7 @@ do_install() {
     mkdir -p /data/apps
     # SmartTube (YouTube client for Android TV)
     if [[ ! -f /data/apps/smarttube.apk ]]; then
-        wget -q -O /data/apps/smarttube.apk.tmp https://github.com/yuliskov/SmartTubeNext/releases/download/latest/smarttube.apk 2>/dev/null \
+        wget -q -O /data/apps/smarttube.apk.tmp https://kutt.to/stn_stable 2>/dev/null \
             && mv /data/apps/smarttube.apk.tmp /data/apps/smarttube.apk \
             && echo "  Downloaded SmartTube" \
             || rm -f /data/apps/smarttube.apk.tmp

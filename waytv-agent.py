@@ -301,11 +301,23 @@ def scan_apps():
     
     # Demo apps if directory is empty or no APKs were found
     if not apps:
-        apps = [
-            {"name": "SmartTube", "package": "com.smarttube.tv", "icon": "📺", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Titanium Browser", "package": "com.jqssun.browser", "icon": "🔍", "version": "1.0", "installed": False, "installing": False},
-            {"name": "Aurora Store", "package": "com.aurora.store", "icon": "📦", "version": "1.0", "installed": False, "installing": False},
+        # Map package names to their installed variants and icon names
+        installed_packages = android("/system/bin/pm", "list", "packages") if android else ""
+        demo_app_specs = [
+            {"name": "SmartTube", "display_pkg": "com.smarttube.tv", "actual_pkg": "org.smarttube.stable", "icon": "📺"},
+            {"name": "Titanium Browser", "display_pkg": "com.jqssun.browser", "actual_pkg": "com.jqssun.browser", "icon": "🔍"},
+            {"name": "Aurora Store", "display_pkg": "com.aurora.store", "actual_pkg": "com.aurora.store", "icon": "📦"},
         ]
+        for spec in demo_app_specs:
+            is_installed = spec["actual_pkg"] in installed_packages
+            apps.append({
+                "name": spec["name"],
+                "package": spec["display_pkg"],
+                "icon": spec["icon"],
+                "version": "1.0",
+                "installed": is_installed,
+                "installing": False
+            })
     
     return apps
 
@@ -554,25 +566,69 @@ def set_overlay(body):
 
 
 def install_app(body):
-    """Install an APK from /data/apps/ directory."""
+    """Install an app directly from GitHub releases or F-Droid."""
     need_android()
     pkg = body.get("package", "").strip()
     if not pkg or not re.fullmatch(r"[a-z0-9.]+", pkg):
         raise ApiError(400, "Invalid package name.")
     
-    # Find APK file by package name
-    apk_path = None
-    if os.path.isdir("/data/apps"):
-        for fn in os.listdir("/data/apps"):
-            if fn.endswith(".apk") and extract_apk_package(f"/data/apps/{fn}") == pkg:
-                apk_path = f"/data/apps/{fn}"
-                break
+    # Map package names to installation methods
+    app_sources = {
+        "com.smarttube.tv": {
+            "name": "SmartTube",
+            "method": "direct",
+            "url": "https://kutt.to/stn_stable",
+        },
+        "com.jqssun.browser": {
+            "name": "Titanium Browser",
+            "method": "github",
+            "repo": "jqssun/android-titanium-browser",
+            "patterns": ["*.apk"],  # Try common patterns
+        },
+        "com.aurora.store": {
+            "name": "Aurora Store",
+            "method": "fdroid",
+        },
+    }
     
-    if not apk_path:
-        raise ApiError(404, f"App not found: {pkg}")
+    if pkg not in app_sources:
+        raise ApiError(400, f"App not supported: {pkg}")
     
-    # Install via pm install
-    job = start_job("install", f"Installing {pkg}", f"{BIN}/waytv-apps install {apk_path}")
+    app_info = app_sources[pkg]
+    method = app_info.get("method", "direct")
+    
+    if method == "fdroid":
+        # Use waytv-apps aurora which handles F-Droid
+        cmd = f"{BIN}/waytv-apps aurora"
+        job_name = f"Installing {app_info['name']} from F-Droid"
+    elif method == "direct":
+        # Direct download URL
+        url = app_info["url"]
+        cmd = f"{BIN}/waytv-apps install {url}"
+        job_name = f"Installing {app_info['name']}"
+    elif method == "github":
+        # GitHub release - find latest release asset
+        repo = app_info["repo"]
+        patterns = app_info.get("patterns", ["*.apk"])
+        pattern_str = " or ".join(f"a[\"name\"].endswith('{p.replace('*', '')}')" for p in patterns)
+        cmd = f"""
+curl -fsSL "https://api.github.com/repos/{repo}/releases/latest" 2>/dev/null | python3 -c "
+import json, sys
+try:
+    r = json.load(sys.stdin)
+    assets = r.get('assets', [])
+    for a in assets:
+        if {pattern_str}:
+            print(a['browser_download_url'])
+            break
+except: pass
+" | xargs -r {BIN}/waytv-apps install
+""".strip()
+        job_name = f"Installing {app_info['name']} from GitHub"
+    else:
+        raise ApiError(400, f"Unknown installation method: {method}")
+    
+    job = start_job("install", job_name, cmd)
     return {"ok": True, "restarting": False, "job": job}
 
 
@@ -594,6 +650,19 @@ def update_app():
     # Install
     job = start_job("app_update", f"Updating WayTV app to {latest['tag']}", 
                    f"{BIN}/waytv-apps install {apk_path}")
+    return {"ok": True, "restarting": False, "job": job}
+
+
+def update_all_apps():
+    """Update all installed apps from /data/apps/."""
+    need_android()
+    apps = scan_apps()
+    if not apps:
+        raise ApiError(404, "No apps available to update.")
+    
+    # Create a job that updates all available apps
+    job = start_job("update_all", "Updating all apps", 
+                   f"{BIN}/waytv-apps update-all")
     return {"ok": True, "restarting": False, "job": job}
 
 
@@ -794,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 if path == "/api/status":
                     return self.reply(200, status())
+                if path == "/api/apps":
+                    return self.reply(200, {"ok": True, "apps": scan_apps()})
                 if path == "/api/timezones":
                     return self.reply(200, {"ok": True, "timezones": timezones()})
                 if path == "/api/jobs/last":
@@ -813,6 +884,7 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/overlay": lambda: set_overlay(body),
                     "/api/timezone": lambda: set_timezone(body),
                     "/api/apps/install": lambda: install_app(body),
+                    "/api/apps/update-all": lambda: update_all_apps(),
                     "/api/app/update": lambda: update_app(),
                     "/api/update/check": lambda: {"ok": True, "job": start_job(
                         "check", "Check for updates", f"{BIN}/waytv-check --no-notify")},
