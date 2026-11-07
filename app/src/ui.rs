@@ -330,7 +330,7 @@ fn info_lines(st: &AppState, sec: Section) -> Vec<(String, String)> {
     match sec {
         Section::Updates => {
             let u = &s.updates;
-            vec![
+            let mut v = vec![
                 (
                     "Status".into(),
                     u.status_line
@@ -348,6 +348,21 @@ fn info_lines(st: &AppState, sec: Section) -> Vec<(String, String)> {
                             .map(|v| format!("v{v}"))
                             .unwrap_or("unknown".into())
                     ),
+                ),
+                (
+                    "WayTV app".into(),
+                    {
+                        let cur = s.app_version.map(|v| v.to_string()).unwrap_or_else(|| "?".into());
+                        let latest = s.app_update.as_ref()
+                            .and_then(|u| u.get("tag"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("?");
+                        if latest == "?" {
+                            format!("installed v{}", cur)
+                        } else {
+                            format!("installed v{}, latest {}", cur, latest)
+                        }
+                    }
                 ),
                 (
                     "Debian updates pending".into(),
@@ -370,7 +385,8 @@ fn info_lines(st: &AppState, sec: Section) -> Vec<(String, String)> {
                         .map(short_time)
                         .unwrap_or("never".into()),
                 ),
-            ]
+            ];
+            v
         }
         Section::System => {
             let mut v = vec![
