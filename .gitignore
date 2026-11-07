@@ -1,0 +1,4 @@
+dist/
+app/target/
+app/build/
+*.jks
