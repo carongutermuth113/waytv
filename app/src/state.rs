@@ -46,8 +46,7 @@ pub enum RowKind {
     TimeZone,
     RestartAndroid,
     CheckUpdates,
-    UpdateAll,
-    UpdateApp,
+    UpdateWayTV,
     ShowJob,
     Reboot,
     /// Apps to install (from /data/apps/*)
@@ -255,12 +254,9 @@ impl AppState {
             ],
             Section::Android => vec![RowKind::Navbar, RowKind::TimeZone, RowKind::RestartAndroid],
             Section::Updates => {
-                let mut v = vec![RowKind::CheckUpdates, RowKind::UpdateAll];
+                let mut v = vec![RowKind::CheckUpdates, RowKind::UpdateWayTV];
                 if self.status.as_ref().and_then(|s| s.job.as_ref()).is_some() {
                     v.insert(0, RowKind::ShowJob);
-                }
-                if self.status.as_ref().and_then(|s| s.app_update.as_ref()).is_some() {
-                    v.insert(0, RowKind::UpdateApp);
                 }
                 v
             }
@@ -341,21 +337,24 @@ impl AppState {
             ),
             RowKind::RestartAndroid => ("Restart Android".into(), String::new()),
             RowKind::CheckUpdates => ("Check for updates".into(), String::new()),
-            RowKind::UpdateAll => (
-                "Update everything now".into(),
-                if st.updates_waiting() {
-                    "Updates waiting".into()
+            RowKind::UpdateWayTV => {
+                let st = self.status.clone().unwrap_or_default();
+                let script_upd = st.updates.script_latest.is_some() 
+                    && st.script_version != st.updates.script_latest;
+                let app_upd = st.app_update.is_some();
+                let debian_upd = st.updates.debian_pending.unwrap_or(0) > 0;
+                
+                let mut updates = vec![];
+                if script_upd { updates.push("script"); }
+                if app_upd { updates.push("app"); }
+                if debian_upd { updates.push("Debian"); }
+                
+                let status = if updates.is_empty() {
+                    "Everything up to date".into()
                 } else {
-                    String::new()
-                },
-            ),
-            RowKind::UpdateApp => {
-                let tag = st.app_update.as_ref()
-                    .and_then(|u| u.get("tag"))
-                    .and_then(|t| t.as_str())
-                    .unwrap_or("unknown");
-                let cur = st.app_version.map(|v| v.to_string()).unwrap_or_else(|| "1".into());
-                ("Update WayTV app".into(), format!("v{} → {}", cur, tag))
+                    format!("Updates: {}", updates.join(", "))
+                };
+                ("Update WayTV".into(), status)
             }
             RowKind::ShowJob => (
                 "Show running task".into(),
@@ -909,26 +908,23 @@ impl AppState {
                 ApiReq::RestartAndroid,
             ),
             RowKind::CheckUpdates => self.send_action(ApiReq::UpdateCheck),
-            RowKind::UpdateAll => self.confirm(
-                "Update everything now?",
-                "Updates the WayTV script, Debian, Android and this app. Android restarts at the end.",
-                "Update",
-                ApiReq::UpdateRun,
-            ),
-            RowKind::UpdateApp => {
-                let url = st.app_update.as_ref()
-                    .and_then(|u| u.get("url"))
-                    .and_then(|u| u.as_str())
-                    .unwrap_or("");
-                if url.is_empty() {
-                    self.set_banner("App update info not available", true);
+            RowKind::UpdateWayTV => {
+                let st = self.status.clone().unwrap_or_default();
+                let script_upd = st.updates.script_latest.is_some() 
+                    && st.script_version != st.updates.script_latest;
+                let app_upd = st.app_update.is_some();
+                let debian_upd = st.updates.debian_pending.unwrap_or(0) > 0;
+                
+                if !script_upd && !app_upd && !debian_upd {
+                    self.set_banner("Everything is already up to date", false);
                     return vec![];
                 }
+                
                 self.confirm(
-                    "Update the WayTV Settings app?",
-                    "Downloads and installs the latest version. Android may restart.",
+                    "Update WayTV (script, app, and system)?",
+                    "This updates the WayTV script, the Settings app, and Debian packages.\nAndroid may restart. About 2-5 minutes.",
                     "Update",
-                    ApiReq::InstallApp("waytv-settings".into()), // Will use URL from agent
+                    ApiReq::UpdateRun,
                 )
             }
             RowKind::ShowJob => {
