@@ -1,0 +1,30 @@
+[package]
+name = "waytv_settings"
+version = "1.0.0"
+edition = "2024"
+
+[dependencies]
+egui = { version = "0.37.0", default-features = false, features = ["default_fonts"] }
+egui_glow = { version = "0.37.0", default-features = false }
+log = "0.4.35"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[target.'cfg(target_os = "android")'.dependencies]
+android-activity = { version = "0.6.1", features = ["native-activity"] }
+android_logger = "0.15.1"
+glow = "0.17"
+khronos-egl = { version = "6.0.0", features = ["static", "no-pkg-config"] }
+libc = "0.2.191"
+ndk = "0.9.0"
+
+[lib]
+name = "waytv_settings"
+crate-type = ["cdylib", "rlib"]
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 2
+strip = true
+panic = "unwind"

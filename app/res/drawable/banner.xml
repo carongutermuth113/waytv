@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 320x180 TV banner: dark background, TV glyph and "WayTV" drawn as strokes. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp" android:height="180dp"
+    android:viewportWidth="320" android:viewportHeight="180">
+    <path android:fillColor="#FF10141C" android:pathData="M0,0h320v180h-320z" />
+    <path android:fillColor="#FF1F2736" android:pathData="M0,150h320v30h-320z" />
+    <!-- TV glyph -->
+    <path android:strokeColor="#FF6CD4FF" android:strokeWidth="7" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M24,62 h76 v52 h-76 z M48,48 L62,62 L76,48 M50,126 L74,126 M62,114 L62,126" />
+    <!-- W -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M120,64 L131,114 L143,80 L155,114 L166,64" />
+    <!-- a -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M200,100 A12,13 0 1,1 176,100 A12,13 0 1,1 200,100 M200,86 L200,114" />
+    <!-- y -->
+    <path android:strokeColor="#FFFFFFFF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M210,82 L221,108 M232,82 L215,126" />
+    <!-- T -->
+    <path android:strokeColor="#FF6CD4FF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M242,64 L274,64 M258,64 L258,114" />
+    <!-- V -->
+    <path android:strokeColor="#FF6CD4FF" android:strokeWidth="8" android:strokeLineCap="round"
+        android:strokeLineJoin="round" android:fillColor="#00000000"
+        android:pathData="M282,64 L294,114 L306,64" />
+</vector>

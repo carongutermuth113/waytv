@@ -1,0 +1,9 @@
+target/
+build/
+.gradle/
+local.properties
+*.jks
+*.keystore
+*.apk
+*.idsig
+passwords.env
