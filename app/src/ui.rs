@@ -590,6 +590,27 @@ fn draw_modal(
                 clicks.push(Click::ModalItem(0));
             }
         }
+        Modal::Changelog { title, body } => {
+            let w = 700.0;
+            let tg = p.layout(title.clone(), font(TITLE - 2.0), Color32::WHITE, w - 60.0);
+            let bg = p.layout(body.clone(), font(BODY), TEXT, w - 60.0);
+            let h = 30.0 + tg.size().y + 16.0 + bg.size().y + 34.0 + 58.0 + 30.0;
+            let rect = Rect::from_center_size(screen.center(), vec2(w, h));
+            p.rect_filled(rect, r(16.0), HEADER_BG);
+            p.rect_stroke(rect, r(16.0), Stroke::new(1.0, DIM), StrokeKind::Inside);
+            let mut y = rect.top() + 30.0;
+            let th = tg.size().y;
+            p.galley(pos2(rect.left() + 30.0, y), tg, Color32::WHITE);
+            y += th + 16.0;
+            let bh = bg.size().y;
+            p.galley(pos2(rect.left() + 30.0, y), bg, TEXT);
+            y += bh + 34.0;
+            let close = Rect::from_min_size(pos2(rect.center().x - 115.0, y), vec2(230.0, 58.0));
+            button(ui, close, "OK", true);
+            if clicked(ui, close, "m_changelog_close", true) {
+                clicks.push(Click::ModalItem(0));
+            }
+        }
         Modal::List {
             title,
             items,

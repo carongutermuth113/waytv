@@ -112,6 +112,11 @@ pub enum Modal {
         title: String,
         body: String,
     },
+    /// Changelog when update is available.
+    Changelog {
+        title: String,
+        body: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,6 +185,10 @@ pub struct AppState {
     pub scroll_to_focus: bool,
     /// Staged changes, sent together with Apply.
     pub changes: Changes,
+    /// Timestamp of last update check (for 2-hour periodic checks).
+    pub last_update_check: std::time::Instant,
+    /// Track if we've shown the changelog for current app version.
+    pub changelog_shown_for_version: Option<i64>,
 }
 
 impl Default for AppState {
@@ -205,6 +214,8 @@ impl AppState {
             failures: 0,
             scroll_to_focus: false,
             changes: Changes::default(),
+            last_update_check: std::time::Instant::now(),
+            changelog_shown_for_version: None,
         }
     }
 
@@ -215,10 +226,17 @@ impl AppState {
             return vec![];
         }
         self.conn = Conn::Loading;
-        vec![
+        // Periodic update check: every 2 hours
+        let should_check = self.last_update_check.elapsed() > std::time::Duration::from_secs(7200);
+        let mut fx = vec![
             Effect::Request(ApiReq::Status),
             Effect::Request(ApiReq::JobsLast),
-        ]
+        ];
+        if should_check {
+            fx.push(Effect::Request(ApiReq::UpdateCheck));
+            self.last_update_check = std::time::Instant::now();
+        }
+        fx
     }
 
     /// The runtime re-read agent.json (on resume, retry or after a 401).
@@ -675,6 +693,11 @@ impl AppState {
                     self.modals.pop();
                 }
             }
+            Modal::Changelog { .. } => {
+                if matches!(n, Nav::Back | Nav::Select) {
+                    self.modals.pop();
+                }
+            }
         }
         vec![]
     }
@@ -1023,7 +1046,7 @@ impl AppState {
         match req {
             ApiReq::Status => {
                 let st: Status = serde_json::from_value(v).unwrap_or_default();
-                self.status = Some(st);
+                self.status = Some(st.clone());
                 self.conn = Conn::Ok;
                 self.failures = 0;
                 self.prune_changes();
@@ -1032,6 +1055,30 @@ impl AppState {
                     self.pane = Pane::Sections;
                 } else if self.row >= n {
                     self.row = n - 1;
+                }
+                
+                // Show changelog when app is updated
+                if let Some(cur_ver) = st.app_version {
+                    if self.changelog_shown_for_version != Some(cur_ver) {
+                        self.changelog_shown_for_version = Some(cur_ver);
+                        let tag = st.app_update.as_ref()
+                            .and_then(|u| u.get("tag"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("latest");
+                        let changelog = format!(
+                            "WayTV Settings app updated to {}!\n\nNew in this version:\n\
+                            • Unified 'Update WayTV' button (script + app + system)\n\
+                            • App version info in Updates status\n\
+                            • Periodic update checks every 2 hours\n\
+                            • One-tap changelog on app launch\n\n\
+                            The app checks for script, app, and Debian updates together.",
+                            tag
+                        );
+                        self.modals.push(Modal::Changelog {
+                            title: "What's new".into(),
+                            body: changelog,
+                        });
+                    }
                 }
                 vec![]
             }
