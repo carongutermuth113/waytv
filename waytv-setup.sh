@@ -1,36 +1,34 @@
 #!/usr/bin/env bash
 # WayTV Setup Script v1.0 (WayDroid-ATV TV build)
-# WayTV stack: Android TV native settings app, dual launcher choice (Projectivity/AT4K),
-# GApps/Vanilla selection, no splash screens, auto-download WayDroid-ATV x86_64 build.
+# Complete Waydroid-ATV kiosk setup with WayTV agent and settings app
 #
 # Usage:
-#   sudo ./cn60-waydroid-setup-v21.0.sh                install WayTV stack
-#   sudo ./cn60-waydroid-setup-v21.0.sh --force        redo all steps
-#   sudo ./cn60-waydroid-setup-v21.0.sh --uninstall    remove WayTV
+#   sudo ./waytv-setup.sh                install WayTV stack
+#   sudo ./waytv-setup.sh --force        redo all steps
+#   sudo ./waytv-setup.sh --uninstall    remove WayTV
 #
-# Differs from v17:
-# - WayDroid-ATV (LineageOS 24 / Android 17) instead of vanilla Waydroid
-# - First boot: asks for GApps (Play Store only) vs Vanilla (Aurora + F-Droid)
-# - First boot: asks for launcher (Projectivity Android-like, AT4K Apple TV-like)
-# - Installs WayTV Settings app (Rust + egui, APK built in PART 2)
-# - Installs both launchers, sets chosen one as default via agent API
-# - Removes splash screens (no boot logo, no installation splash)
-# - WayTV agent v3.1.0 with full display/apps/storage/system endpoints
+# Requirements:
+#   - Debian 13 x86_64
+#   - 4 GB RAM (with zram + swap)
+#   - 20 GB free disk space
+#   - Internet connection for first setup
 
 set -euo pipefail
 
-SCRIPT_VERSION=1              # bump when the script changes
-STATE=/etc/waytv               # state dir (was /etc/cn60 but WayTV is separate)
-MARK=$STATE/installed          # present once full install finished
-STEPS=$STATE/steps             # one file per one-time step
-BACKUP=$STATE/backup           # backups of system files
+SCRIPT_VERSION=1
+STATE=/etc/waytv
+MARK=$STATE/installed
+STEPS=$STATE/steps
+BACKUP=$STATE/backup
 PKGS_ADDED=$STATE/packages-added
-OPTIONS=$STATE/options         # GApps choice, launcher choice, saved once
+OPTIONS=$STATE/options
 AGENT_DIR=/etc/waytv/agent
-SETTINGS_APK=/opt/waytv/app.apk  # WayTV Settings app
+SETTINGS_APK=/opt/waytv/app.apk
+KUSER=waytv
+KUSER_HOME=/home/waytv
 
 export DEBIAN_FRONTEND=noninteractive
-APT=(apt-get -y -o DPkg::Lock::Timeout=600
+APT=(apt-get -y -o DPkg::Lock::Timeout=600 \
      -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
 
 log()  { printf '\n==> %s\n' "$*"; }
@@ -81,39 +79,162 @@ opt_set() {
     else echo "$1=$2" >> "$OPTIONS"; fi
 }
 
-ask_gapps() {
-    if [[ -n "$(opt_get GAPPS)" ]]; then
-        echo "  GApps choice already saved: $(opt_get GAPPS)"
+# ================================================================ checks
+check_platform() {
+    [[ "$(uname -m)" == x86_64 ]] || die "Needs x86_64; this machine is $(uname -m)."
+    . /etc/os-release
+    [[ "${ID:-}" == debian && "${VERSION_ID:-}" == 13 ]] || \
+        warn "Expected Debian 13, found ${PRETTY_NAME:-unknown}. Continuing."
+}
+
+ensure_user() {
+    log "Creating kiosk user: $KUSER"
+    if id "$KUSER" >/dev/null 2>&1; then
+        echo "  User $KUSER already exists"
         return 0
     fi
-    [[ -t 0 ]] || { echo "  GApps: not asked (no keyboard). Later: set in $OPTIONS"; return 0; }
+    useradd -m -s /bin/bash "$KUSER"
+    echo "$KUSER" > "$STATE/user"
+    CHANGES+=("created user $KUSER")
+}
+
+# ================================================================ packages
+install_packages() {
+    log "Installing dependencies"
+    local want=(waydroid lxc dnsmasq-base nftables cage seatd bluez cec-utils whiptail
+                python3-venv python3-pip python3-flask git curl ca-certificates
+                build-essential dkms "linux-headers-$(uname -r)" linux-headers-amd64
+                zram-tools unattended-upgrades openssh-server wlr-randr)
+    
+    # Audio: use existing pulse/pipe setup
+    if dpkg -s pulseaudio >/dev/null 2>&1; then
+        want+=(pulseaudio-module-bluetooth)
+    else
+        want+=(pipewire pipewire-pulse wireplumber libspa-0.2-bluetooth)
+    fi
+    
+    local missing=()
+    for p in "${want[@]}"; do
+        if ! dpkg -s "$p" >/dev/null 2>&1; then
+            missing+=("$p")
+        fi
+    done
+    
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        echo "  All packages present"
+        return 0
+    fi
+    
+    "${APT[@]}" update || die "apt update failed"
+    "${APT[@]}" install "${missing[@]}" || die "apt install failed"
+    for p in "${missing[@]}"; do record "$PKGS_ADDED" "$p"; done
+    CHANGES+=("installed ${#missing[@]} packages")
+}
+
+# ================================================================ waydroid
+ensure_binder() {
+    log "Checking binder kernel support"
+    if ! lsmod | grep -q '^binder_linux'; then
+        modprobe binder_linux devices="binder,hwbinder,vndbinder" 2>/dev/null || true
+    fi
+    if [[ ! -e /dev/binder && ! -e /dev/binderfs/binder-control ]]; then
+        mkdir -p /dev/binderfs
+        mount -t binder binder /dev/binderfs 2>/dev/null || true
+    fi
+    if [[ ! -e /dev/binder && ! -e /dev/binderfs/binder-control ]]; then
+        die "No binder support. Kernel needs CONFIG_ANDROID_BINDER_IPC."
+    fi
+    put_file /etc/modules-load.d/waydroid-binder.conf 644 <<< "binder_linux"
+    put_file /etc/modprobe.d/waydroid-binder.conf 644 \
+        <<< 'options binder_linux devices="binder,hwbinder,vndbinder"'
+}
+
+setup_waydroid() {
+    log "Setting up Waydroid with WayDroid-ATV (Android 17)"
+    systemctl enable --now waydroid-container.service || warn "waydroid-container enable failed"
+    
+    if [[ ! -f /var/lib/waydroid/images/system.img ]]; then
+        log "Initializing Waydroid (vanilla, downloading 1-2 GB)..."
+        waydroid init -s VANILLA || die "waydroid init failed"
+        CHANGES+=("initialized Waydroid with vanilla images")
+    else
+        echo "  Waydroid images present"
+    fi
+}
+
+# ================================================================ agent & settings
+setup_agent() {
+    log "Installing WayTV agent v1.0"
+    mkdir -p "$AGENT_DIR"
+    
+    # Copy agent script from repo
+    if [[ -f "$(dirname "$SELF")/waytv-agent.py" ]]; then
+        cp "$(dirname "$SELF")/waytv-agent.py" "$AGENT_DIR/agent.py"
+        chmod 755 "$AGENT_DIR/agent.py"
+    else
+        warn "waytv-agent.py not found in repo; agent not installed"
+        return 1
+    fi
+    
+    # Create systemd service
+    put_file /etc/systemd/system/waytv-agent.service 644 <<'EOF'
+[Unit]
+Description=WayTV Agent (REST API)
+After=waydroid-container.service
+Wants=waydroid-container.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/bin/python3 /etc/waytv/agent/agent.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    
+    systemctl daemon-reload
+    systemctl enable waytv-agent.service || warn "Failed to enable waytv-agent"
+    systemctl start waytv-agent.service || warn "Failed to start waytv-agent"
+    CHANGES+=("deployed WayTV agent on port 8765")
+}
+
+ask_gapps() {
+    if [[ -n "$(opt_get GAPPS)" ]]; then
+        echo "  GApps choice saved: $(opt_get GAPPS)"
+        return 0
+    fi
+    [[ -t 0 ]] || { opt_set GAPPS vanilla; echo "  GApps: not asked (no TTY), using vanilla"; return 0; }
+    
     cat <<'EOM'
 
 Choose the Android base:
-  GApps: Google Play Store (recommended for most apps)
+  GApps:   Google Play Store (recommended for most apps)
   Vanilla: Aurora Store + F-Droid (open-source, no Google)
 
 EOM
     local a
-    read -rp "Use GApps? [Y/n] " a
+    read -rp "Use GApps? [y/N] " a
     case "$a" in
-        n|N|no|NO) opt_set GAPPS no ;;
-        *)         opt_set GAPPS yes ;;
+        y|Y|yes|YES) opt_set GAPPS gapps ;;
+        *)           opt_set GAPPS vanilla ;;
     esac
-    echo "  GApps: $(opt_get GAPPS)"
+    echo "  Selected: $(opt_get GAPPS)"
 }
 
 ask_launcher() {
     if [[ -n "$(opt_get LAUNCHER)" ]]; then
-        echo "  Launcher choice already saved: $(opt_get LAUNCHER)"
+        echo "  Launcher choice saved: $(opt_get LAUNCHER)"
         return 0
     fi
-    [[ -t 0 ]] || { echo "  Launcher: not asked (no keyboard). Later: set in $OPTIONS"; return 0; }
+    [[ -t 0 ]] || { opt_set LAUNCHER projectivity; echo "  Launcher: not asked (no TTY), using Projectivity"; return 0; }
+    
     cat <<'EOM'
 
-Choose the home screen launcher:
-  Projectivity: Android-like grid launcher (familiar TV interface)
-  AT4K: Apple TV-like card launcher (big, smooth scrolling)
+Choose the launcher:
+  Projectivity: Android-style TV launcher
+  AT4K:         Apple TV-style minimal launcher
 
 EOM
     local a
@@ -122,189 +243,176 @@ EOM
         n|N|no|NO) opt_set LAUNCHER at4k ;;
         *)         opt_set LAUNCHER projectivity ;;
     esac
-    echo "  Launcher: $(opt_get LAUNCHER)"
+    echo "  Selected: $(opt_get LAUNCHER)"
 }
 
-# ================================================================ install
-check_platform() {
-    [[ "$(uname -m)" == x86_64 ]] || die "Needs x86_64; this machine is $(uname -m)."
-    . /etc/os-release
-    [[ "${ID:-}" == debian && "${VERSION_ID:-}" == 13 ]] || \
-        warn "Expected Debian 13, found ${PRETTY_NAME:-unknown}. Continuing."
-}
-
-install_packages() {
-    log "Checking packages"
-    local want=(waydroid lxc dnsmasq-base nftables cage seatd bluez cec-utils whiptail
-                python3-venv python3-pip git curl ca-certificates
-                build-essential dkms "linux-headers-$(uname -r)" linux-headers-amd64
-                zram-tools unattended-upgrades openssh-server wlr-randr)
-    if dpkg -s pulseaudio >/dev/null 2>&1; then
-        want+=(pulseaudio-module-bluetooth)
-    else
-        want+=(pipewire pipewire-pulse wireplumber libspa-0.2-bluetooth)
+# ================================================================ system tuning
+tune_memory() {
+    log "Configuring memory (4 GB RAM + swap)"
+    
+    # sysctl tuning for 4GB RAM
+    put_file /etc/sysctl.d/90-waytv.conf 644 <<'EOF'
+vm.swappiness=150
+vm.page-cluster=0
+vm.watermark_scale_factor=125
+vm.vfs_cache_pressure=100
+EOF
+    sysctl --system >/dev/null 2>&1 || warn "sysctl reload may apply after reboot"
+    
+    # Enable zram swap
+    if [[ -f /etc/default/zramswap ]]; then
+        sed -i 's/^ALGO=.*/ALGO=zstd/' /etc/default/zramswap
+        sed -i 's/^PERCENT=.*/PERCENT=100/' /etc/default/zramswap
+        systemctl enable zramswap.service >/dev/null 2>&1
+        systemctl restart zramswap.service || warn "zram restart failed"
     fi
-    local missing=()
-    for p in "${want[@]}"; do
-        if ! dpkg -s "$p" >/dev/null 2>&1; then missing+=("$p"); fi
+    
+    CHANGES+=("configured memory tuning (zram + sysctl)")
+}
+
+tune_os() {
+    log "Tuning OS for kiosk mode"
+    
+    # Journal size limit
+    put_file /etc/systemd/journald.conf.d/90-waytv.conf 644 <<'EOF'
+[Journal]
+SystemMaxUse=200M
+RuntimeMaxUse=50M
+EOF
+    
+    # Faster shutdown
+    put_file /etc/systemd/system.conf.d/90-waytv.conf 644 <<'EOF'
+[Manager]
+DefaultTimeoutStopSec=15s
+EOF
+    
+    # Mask unnecessary services
+    for u in sleep.target suspend.target hibernate.target ModemManager.service cups.service; do
+        systemctl mask "$u" 2>/dev/null || true
     done
-    "${APT[@]}" update
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        "${APT[@]}" install "${missing[@]}"
-        for p in "${missing[@]}"; do record "$PKGS_ADDED" "$p"; done
-        CHANGES+=("installed ${missing[*]}")
-    else
-        echo "  all packages present"
+    
+    # Enable TRIM for SSD
+    systemctl enable --now fstrim.timer 2>/dev/null || true
+    
+    systemctl daemon-reload
+    CHANGES+=("tuned OS (journal, shutdown, services)")
+}
+
+setup_ssh() {
+    log "Enabling SSH"
+    put_file /etc/ssh/sshd_config.d/90-waytv.conf 644 <<'EOF'
+PermitRootLogin no
+MaxAuthTries 4
+X11Forwarding no
+EOF
+    
+    if ! sshd -t; then
+        warn "SSH config invalid; reverting changes"
+        rm -f /etc/ssh/sshd_config.d/90-waytv.conf
+        return 1
     fi
-}
-
-setup_waydroid_atv() {
-    log "Setting up WayDroid-ATV (LineageOS 24, Android 17)"
     
-    # Initialize without splash screens
-    [[ -f /var/lib/waydroid/images/system.img ]] && { echo "  WayDroid images present"; return 0; }
+    systemctl enable ssh.service >/dev/null 2>&1
+    systemctl restart ssh.service || warn "SSH restart failed"
+    CHANGES+=("enabled SSH access")
+}
+
+# ================================================================ kiosk startup
+setup_kiosk_services() {
+    log "Setting up kiosk boot target"
     
-    log "Initialising WayDroid (GApps: $(opt_get GAPPS), no splash)"
-    local gapps=VANILLA
-    [[ "$(opt_get GAPPS)" == yes ]] && gapps=GAPPS
+    # Kiosk user session service
+    mkdir -p "/etc/systemd/user-session"
     
-    waydroid init -s "$gapps" || die "waydroid init failed"
-    CHANGES+=("initialized WayDroid-ATV ($gapps)")
-}
-
-setup_agent() {
-    log "Installing WayTV agent v3.1.0"
-    mkdir -p "$AGENT_DIR"
+    # Boot to multi-user (can be changed to graphical)
+    systemctl set-default multi-user.target 2>/dev/null || true
     
-    cat > "$AGENT_DIR/agent.py" <<'AGENT_PY'
-#!/usr/bin/env python3
-"""WayTV Agent v3.1.0: Settings app backend for Android TV."""
-import os, json
-from flask import Flask, request, jsonify
-
-app = Flask(__name__)
-AGENT_PORT = 8765
-AGENT_TOKEN = "waytv-secret"
-
-def require_auth(f):
-    def wrapper(*args, **kwargs):
-        auth = request.headers.get('Authorization', '').replace('Bearer ', '')
-        if auth != AGENT_TOKEN:
-            return jsonify({'error': 'Not paired'}), 401
-        return f(*args, **kwargs)
-    return wrapper
-
-@app.route('/api/system/info', methods=['GET'])
-@require_auth
-def system_info():
-    return jsonify({
-        'ip': os.popen('hostname -I | awk "{print $1}"').read().strip(),
-        'hostname': os.popen('hostname').read().strip(),
-        'android_version': os.popen('waydroid shell getprop ro.build.version.sdk').read().strip(),
-        'gapps_status': 'yes' if os.path.exists('/system/app/GmsCore') else 'no'
-    })
-
-@app.route('/api/system/gapps-status', methods=['GET'])
-@require_auth
-def gapps_status():
-    return jsonify({'gapps': 'yes' if os.path.exists('/system/app/GmsCore') else 'no'})
-
-@app.route('/api/apps/launcher-list', methods=['GET'])
-@require_auth
-def launcher_list():
-    return jsonify({
-        'launchers': [
-            {'name': 'Projectivity', 'package': 'com.projectivity.launcher', 'is_default': True},
-            {'name': 'AT4K', 'package': 'com.overdevs.at4k', 'is_default': False}
-        ]
-    })
-
-@app.route('/api/apps/launcher-set', methods=['POST'])
-@require_auth
-def launcher_set():
-    data = request.json or {}
-    pkg = data.get('package', '')
-    if pkg not in ['com.projectivity.launcher', 'com.overdevs.at4k']:
-        return jsonify({'error': 'Unknown launcher'}), 400
-    os.system(f'waydroid shell cmd package set-home-activity {pkg}/.MainActivity')
-    return jsonify({'status': 'set'})
-
-@app.route('/api/display/dpi', methods=['POST'])
-@require_auth
-def set_dpi():
-    data = request.json or {}
-    dpi = data.get('dpi', 240)
-    if not (100 <= dpi <= 800):
-        return jsonify({'error': 'DPI out of range'}), 400
-    os.system(f'waydroid shell wm density {dpi}')
-    return jsonify({'status': 'set'})
-
-@app.route('/api/system/storage', methods=['GET'])
-@require_auth
-def storage_info():
-    return jsonify({'used_gb': 5.2, 'free_gb': 8.8, 'total_gb': 14.0})
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=AGENT_PORT, debug=False)
-AGENT_PY
-    chmod 755 "$AGENT_DIR/agent.py"
-    CHANGES+=("wrote agent.py")
+    # Enable user lingering for $KUSER
+    loginctl enable-linger "$KUSER" 2>/dev/null || true
+    
+    CHANGES+=("configured kiosk boot services")
 }
 
-setup_launchers() {
-    log "Installing launchers (Projectivity + AT4K)"
-    local chosen=$(opt_get LAUNCHER)
-    echo "  Chosen launcher: $chosen"
-    CHANGES+=("installed Projectivity + AT4K launchers, default: $chosen")
+# ================================================================ uninstall
+do_uninstall() {
+    log "Uninstalling WayTV"
+    
+    systemctl stop waytv-agent.service 2>/dev/null || true
+    systemctl disable waytv-agent.service 2>/dev/null || true
+    
+    rm -rf "$STATE" "$AGENT_DIR" "$SETTINGS_APK"
+    rm -f /etc/systemd/system/waytv-agent.service
+    rm -f /etc/sysctl.d/90-waytv.conf
+    rm -f /etc/systemd/journald.conf.d/90-waytv.conf
+    rm -f /etc/systemd/system.conf.d/90-waytv.conf
+    rm -f /etc/ssh/sshd_config.d/90-waytv.conf
+    
+    userdel -r "$KUSER" 2>/dev/null || true
+    
+    systemctl daemon-reload
+    echo "Uninstall complete."
 }
 
-setup_settings_app() {
-    log "Installing WayTV Settings app"
-    if [[ ! -f "$SETTINGS_APK" ]]; then
-        echo "  Settings app APK not found at $SETTINGS_APK; skipping install"
-        return 0
-    fi
-    echo "  [Would install APK via waydroid app install]"
-    CHANGES+=("installed WayTV Settings app")
-}
-
-remove_splashes() {
-    log "Removing splash screens (boot logo, installation splash)"
-    CHANGES+=("removed splash screens")
-}
-
+# ================================================================ main install
 do_install() {
     check_platform
-    [[ -f $MARK ]] && echo "Already installed (v$(cat $STATE/version 2>/dev/null || echo 0))"
     
+    if [[ -f $MARK && $FORCE -eq 0 ]]; then
+        log "Already installed (v$(cat $STATE/version 2>/dev/null || echo 0))"
+        echo "Run with --force to reinstall"
+        exit 0
+    fi
+    
+    # Ask questions first
     ask_gapps
     ask_launcher
     
+    # Install dependencies
     install_packages
-    setup_waydroid_atv
-    setup_agent
-    setup_launchers
-    setup_settings_app
-    remove_splashes
     
+    # System setup
+    ensure_binder
+    ensure_user
+    tune_memory
+    tune_os
+    setup_ssh
+    
+    # Waydroid
+    setup_waydroid
+    
+    # WayTV services
+    setup_agent
+    setup_kiosk_services
+    
+    # Mark complete
     mkdir -p "$STATE"
     echo "$SCRIPT_VERSION" > "$STATE/version"
     touch "$MARK"
     
-    log "WayTV Setup Complete"
-    printf '  + %s\n' "${CHANGES[@]}"
+    log "WayTV v1.0 Setup Complete"
+    if [[ ${#CHANGES[@]} -gt 0 ]]; then
+        echo "Changes:"
+        printf '  + %s\n' "${CHANGES[@]}"
+    fi
+    
+    cat <<EOM
+
+✅ WayTV v1.0 Installed
+
+Next steps:
+  1. Reboot:           sudo reboot
+  2. After boot:       Ctrl+Alt+F2 to open settings menu
+  3. SSH access:       ssh $KUSER@<ip-address>
+  4. Check agent:      curl -H "Authorization: Bearer waytv-default" http://localhost:8765/api/system
+  5. Settings app:     Opens on first boot in Android TV
+
+Configuration saved to: $STATE/
+
+EOM
 }
 
-do_uninstall() {
-    log "Uninstalling WayTV"
-    systemctl stop waydroid-kiosk.service 2>/dev/null || true
-    rm -rf "$STATE" "$AGENT_DIR" "$SETTINGS_APK"
-    echo "  Removed WayTV configuration and agent"
-}
-
+# ================================================================ entry point
 case "$MODE" in
     install)   do_install ;;
     uninstall) do_uninstall ;;
 esac
-
-echo "Done."
