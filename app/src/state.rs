@@ -14,17 +14,15 @@ pub enum Section {
     Android,
     Updates,
     System,
-    Apps,
     Settings,
 }
 
 impl Section {
-    pub const ALL: [Section; 6] = [
+    pub const ALL: [Section; 5] = [
         Section::Display,
         Section::Android,
         Section::Updates,
         Section::System,
-        Section::Apps,
         Section::Settings,
     ];
     pub fn title(self) -> &'static str {
@@ -33,7 +31,6 @@ impl Section {
             Section::Android => "Android",
             Section::Updates => "Updates",
             Section::System => "System",
-            Section::Apps => "Apps",
             Section::Settings => "Settings",
         }
     }
@@ -50,12 +47,9 @@ pub enum RowKind {
     RestartAndroid,
     CheckUpdates,
     UpdateWayTV,
-    UpdateAllApps,
     AutoUpdateApps,
     ShowJob,
     Reboot,
-    /// Apps to install (from /data/apps/*)
-    InstallApp(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -284,21 +278,6 @@ impl AppState {
                 v
             }
             Section::System => vec![RowKind::Reboot],
-            Section::Apps => {
-                let mut v = vec![RowKind::UpdateAllApps];
-                v.extend(
-                    self.status
-                        .as_ref()
-                        .map(|st| {
-                            st.apps
-                                .iter()
-                                .map(|a| RowKind::InstallApp(a.package.clone()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()
-                );
-                v
-            }
             Section::Settings => vec![RowKind::AutoUpdateApps],
         }
     }
@@ -389,40 +368,6 @@ impl AppState {
                 st.job.as_ref().map(|j| j.title()).unwrap_or_default(),
             ),
             RowKind::Reboot => ("Reboot box".into(), String::new()),
-            RowKind::InstallApp(pkg) => {
-                let app = st
-                    .apps
-                    .iter()
-                    .find(|a| a.package == *pkg)
-                    .cloned()
-                    .unwrap_or_default();
-                let status = if app.installed {
-                    if app.installing {
-                        "Installing…".into()
-                    } else {
-                        "Installed".into()
-                    }
-                } else {
-                    format!(
-                        "v{}",
-                        app.version.as_deref().unwrap_or("?")
-                    )
-                };
-                let icon = app.icon.as_deref().unwrap_or("📦");
-                let name = format!("{} {}", icon, app.name);
-                (name, status)
-            }
-            RowKind::UpdateAllApps => {
-                let updates_available = st.apps.iter().any(|a| a.installed && !a.installing);
-                (
-                    "🔄 Update all apps".into(),
-                    if updates_available {
-                        "Updates available".into()
-                    } else {
-                        String::new()
-                    },
-                )
-            }
             RowKind::AutoUpdateApps => {
                 ("⚙️  Auto-update apps".into(), "Coming soon".into())
             }
@@ -1022,25 +967,6 @@ impl AppState {
                 "Reboot",
                 ApiReq::Reboot,
             ),
-            RowKind::InstallApp(pkg) => {
-                let app = st
-                    .apps
-                    .iter()
-                    .find(|a| a.package == *pkg)
-                    .cloned()
-                    .unwrap_or_default();
-                if app.installed {
-                    self.set_banner(format!("{} is already installed", app.name), false);
-                    vec![]
-                } else {
-                    self.confirm(
-                        &format!("Install {}?", app.name),
-                        &format!("Download and install from {}. About a minute.", app.package),
-                        "Install",
-                        ApiReq::InstallApp(pkg.clone()),
-                    )
-                }
-            }
         }
     }
 
@@ -1442,8 +1368,6 @@ mod tests {
         assert_eq!(s.section_kind(), Section::Updates);
         s.nav(Nav::Down);
         assert_eq!(s.section_kind(), Section::System);
-        s.nav(Nav::Down);
-        assert_eq!(s.section_kind(), Section::Apps);
         s.nav(Nav::Down);
         assert_eq!(s.section_kind(), Section::Settings, "clamped at bottom");
         s.nav(Nav::NextSection);
