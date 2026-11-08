@@ -17,7 +17,7 @@
 
 set -euo pipefail
 
-SCRIPT_VERSION=19.1            # bump when the script changes (major.minor)
+SCRIPT_VERSION=20            # bump when the script changes (major.minor)
 STATE=/etc/waytv
 MARK=$STATE/installed          # present once a full install finished
 STEPS=$STATE/steps             # one file per one-time step, holding the step version
@@ -1017,7 +1017,7 @@ KUSER="$(cat /etc/waytv/user 2>/dev/null || echo tv)"
 # user only: they stay in the Android image and "waytv-tweaks apps-restore" brings them back.
 APPS=(com.android.deskclock:Clock com.android.contacts:Contacts org.lineageos.eleven:Music
       org.lineageos.recorder:Recorder com.android.calculator2:Calculator
-      org.lineageos.etar:Calendar org.lineageos.aperture:Camera org.lineageos.jelly:Browser)
+      org.lineageos.etar:Calendar org.lineageos.aperture:Camera)
 
 ash() { waydroid shell -- "$@" 2>&1 | tr -d '\r'; }
 

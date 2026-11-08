@@ -572,18 +572,19 @@ def install_app(body):
     if not pkg or not re.fullmatch(r"[a-z0-9.]+", pkg):
         raise ApiError(400, "Invalid package name.")
     
-    # Map package names to installation methods
+    # Map package names to installation methods (Obtainium-style)
     app_sources = {
         "com.smarttube.tv": {
             "name": "SmartTube",
-            "method": "direct",
-            "url": "https://kutt.to/stn_stable",
+            "method": "github",
+            "repo": "yuliskov/SmartTube",
+            "apk_patterns": ["smarttube.*\\.apk"],
         },
-        "com.jqssun.browser": {
+        "io.github.jqssun.helium": {
             "name": "Titanium Browser",
             "method": "github",
-            "repo": "jqssun/android-titanium-browser",
-            "patterns": ["*.apk"],  # Try common patterns
+            "repo": "zDProj/android-titanium-browser-x86_64",
+            "apk_patterns": [".*x86_64.*\\.apk", ".*release.*\\.apk"],
         },
         "com.aurora.store": {
             "name": "Aurora Store",
@@ -607,24 +608,65 @@ def install_app(body):
         cmd = f"{BIN}/waytv-apps install {url}"
         job_name = f"Installing {app_info['name']}"
     elif method == "github":
-        # GitHub release - find latest release asset
+        # Obtainium-style: fetch GitHub releases API, find best APK match
         repo = app_info["repo"]
-        patterns = app_info.get("patterns", ["*.apk"])
-        pattern_str = " or ".join(f"a[\"name\"].endswith('{p.replace('*', '')}')" for p in patterns)
-        cmd = f"""
-curl -fsSL "https://api.github.com/repos/{repo}/releases/latest" 2>/dev/null | python3 -c "
-import json, sys
+        patterns = app_info.get("apk_patterns", [".*\\.apk"])
+        pattern_regex = patterns[0] if patterns else ".*\\.apk"
+        
+        # Check if GitHub token is available
+        github_token = ""
+        try:
+            with open("/etc/waytv/update.conf", "r") as f:
+                for line in f:
+                    if line.startswith("GITHUB_TOKEN="):
+                        github_token = line.split("=", 1)[1].strip()
+                        break
+        except:
+            pass
+        
+        # Build curl header with token if available
+        auth_header = f"-H 'Authorization: token {github_token}'" if github_token else ""
+        
+        # Bash script to fetch and find APK (Obtainium-style)
+        bash_script = f"""
+set -e
+REPO="{repo}"
+PATTERN="{pattern_regex}"
+AUTH_HEADER="{auth_header}"
+
+# Fetch latest 100 releases from GitHub API (with auth if available)
+RESPONSE=$(curl -s $AUTH_HEADER "https://api.github.com/repos/${{REPO}}/releases?per_page=100")
+
+# Parse JSON and find first APK matching pattern
+APK_URL=$(echo "${{RESPONSE}}" | python3 -c "
+import json, sys, re
 try:
-    r = json.load(sys.stdin)
-    assets = r.get('assets', [])
-    for a in assets:
-        if {pattern_str}:
-            print(a['browser_download_url'])
-            break
-except: pass
-" | xargs -r {BIN}/waytv-apps install
-""".strip()
-        job_name = f"Installing {app_info['name']} from GitHub"
+    data = json.load(sys.stdin)
+    if 'message' in data and 'rate limit' in data.get('message', '').lower():
+        print('GitHub API rate limit exceeded. Add GITHUB_TOKEN to /etc/waytv/update.conf', file=sys.stderr)
+        sys.exit(1)
+    if isinstance(data, list):
+        for release in data:
+            if release.get('draft'):
+                continue
+            for asset in release.get('assets', []):
+                name = asset.get('name', '')
+                if re.search(r'{pattern_regex}', name):
+                    url = asset.get('browser_download_url', '')
+                    if url:
+                        print(url)
+                        sys.exit(0)
+except Exception as e:
+    print(f'Error: {{e}}', file=sys.stderr)
+    pass
+sys.exit(1)
+")
+
+echo "${{APK_URL}}"
+"""
+        
+        cmd = f"bash -c {repr(bash_script)} | xargs -r {BIN}/waytv-apps install"
+        job_name = f"Installing {app_info['name']} from GitHub (Obtainium-style)"
     else:
         raise ApiError(400, f"Unknown installation method: {method}")
     
