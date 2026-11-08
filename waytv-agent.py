@@ -350,8 +350,6 @@ def status():
                     "reboot_needed": chk.get("REBOOT") == "1" if chk else None,
                     "checked_at": checked},
         "perf": perf, "job": running_job(),
-        "app_version": get_app_version(),
-        "app_update": get_latest_app_version(),
     }
 
 
@@ -661,7 +659,6 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 if path == "/api/status":
                     return self.reply(200, status())
-                    return self.reply(200, {"ok": True})
                 if path == "/api/timezones":
                     return self.reply(200, {"ok": True, "timezones": timezones()})
                 if path == "/api/jobs/last":
