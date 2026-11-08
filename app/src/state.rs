@@ -928,29 +928,6 @@ impl AppState {
                     ApiReq::UpdateRun,
                 )
             }
-            RowKind::UpdateAllApps => {
-                let st = self.status.clone().unwrap_or_default();
-                let apps_to_update: Vec<_> = st.apps.iter()
-                    .filter(|a| a.installed && !a.installing)
-                    .collect();
-                
-                if apps_to_update.is_empty() {
-                    self.set_banner("No installed apps to update", false);
-                    return vec![];
-                }
-                
-                let app_names = apps_to_update.iter()
-                    .map(|a| a.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                
-                self.confirm(
-                    "Update installed apps?",
-                    &format!("Updates: {}", app_names),
-                    "Update",
-                    ApiReq::UpdateAllApps,
-                )
-            }
             RowKind::AutoUpdateApps => {
                 self.set_banner("Auto-update setting will be added soon", false);
                 vec![]
