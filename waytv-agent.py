@@ -263,107 +263,6 @@ def start_job(kind, title, shell_cmd):
 
 
 # ------------------------------------------------------------------ status
-def scan_apps():
-    """List available APKs in /data/apps/ with metadata."""
-    apps_dir = "/data/apps"
-    apps = []
-    
-    # Icon mapping for known apps (emoji or UTF-8 symbols)
-    app_icons = {
-        "com.smarttube.tv": "📺",  # TV icon
-        "com.jqssun.browser": "🔍",  # Magnifying glass (search)
-        "com.aurora.store": "📦",  # Package icon
-    }
-    
-    if os.path.isdir(apps_dir):
-        for fn in sorted(os.listdir(apps_dir)):
-            if not fn.endswith(".apk"):
-                continue
-            path = os.path.join(apps_dir, fn)
-            pkg = extract_apk_package(path)
-            if not pkg:
-                continue
-            
-            # Check if installed
-            installed = android("/system/bin/pm", "list", "packages") and pkg in android("/system/bin/pm", "list", "packages")
-            
-            # Try to get icon from installed app, otherwise use mapping
-            icon = get_app_icon(pkg) if installed else app_icons.get(pkg)
-            
-            apps.append({
-                "name": fn.replace(".apk", "").replace("-", " "),
-                "package": pkg,
-                "icon": icon,
-                "version": "1.0",
-                "installed": bool(installed),
-                "installing": False
-            })
-    
-    # Demo apps if directory is empty or no APKs were found
-    if not apps:
-        # Map package names to their installed variants and icon names
-        installed_packages = android("/system/bin/pm", "list", "packages") if android else ""
-        demo_app_specs = [
-            {"name": "SmartTube", "display_pkg": "com.smarttube.tv", "actual_pkg": "org.smarttube.stable", "icon": "📺"},
-            {"name": "Titanium Browser", "display_pkg": "com.jqssun.browser", "actual_pkg": "com.jqssun.browser", "icon": "🔍"},
-            {"name": "Aurora Store", "display_pkg": "com.aurora.store", "actual_pkg": "com.aurora.store", "icon": "📦"},
-        ]
-        for spec in demo_app_specs:
-            is_installed = spec["actual_pkg"] in installed_packages
-            apps.append({
-                "name": spec["name"],
-                "package": spec["display_pkg"],
-                "icon": spec["icon"],
-                "version": "1.0",
-                "installed": is_installed,
-                "installing": False
-            })
-    
-    return apps
-
-
-def get_app_icon(package):
-    """Get app icon symbol or emoji for an installed app."""
-    # Map packages to meaningful Unicode/emoji
-    icons = {
-        "com.smarttube.tv": "📺",
-        "com.jqssun.browser": "🔍",
-        "com.aurora.store": "📦",
-        "com.android.settings": "⚙️",
-        "com.google.android.youtube": "📹",
-        "com.google.android.gms": "☁️",
-        "com.google.android.apps.maps": "🗺️",
-        "com.google.android.apps.messaging": "💬",
-        "com.google.android.apps.photos": "📸",
-    }
-    return icons.get(package, "📱")  # Default phone icon
-
-
-def extract_apk_package(apk_path):
-    """Extract package name from AndroidManifest.xml in APK (quick parse)."""
-    try:
-        with zipfile.ZipFile(apk_path, "r") as z:
-            manifest = z.read("AndroidManifest.xml")
-            # Look for package=" in the binary XML
-            i = manifest.find(b'package="')
-            if i > 0:
-                i += 9
-                j = manifest.find(b'"', i)
-                return manifest[i:j].decode("utf-8", "ignore")
-    except Exception:
-        pass
-    return None
-
-
-def get_app_version():
-    """Get installed WayTV Settings app version code."""
-    if not android_up():
-        return None
-    out = android("/system/bin/dumpsys", "package", "tv.waytv.settings")
-    m = re.search(r"versionCode=(\d+)", out)
-    return int(m.group(1)) if m else None
-
-
 def get_latest_app_version():
     """Fetch latest app version from GitHub releases."""
     try:
@@ -450,7 +349,7 @@ def status():
                     "debian_pending": num(chk.get("DEBIAN_UPDATES")),
                     "reboot_needed": chk.get("REBOOT") == "1" if chk else None,
                     "checked_at": checked},
-        "perf": perf, "job": running_job(), "apps": scan_apps(),
+        "perf": perf, "job": running_job(),
         "app_version": get_app_version(),
         "app_update": get_latest_app_version(),
     }
@@ -563,148 +462,6 @@ def set_overlay(body):
         raise ApiError(400, "state must be 'on' or 'off'.")
     job = start_job("overlay", f"Performance overlay {want}", f"{BIN}/waytv-perf overlay {want}")
     return {"ok": True, "restarting": True, "job": job}
-
-
-def install_app(body):
-    """Install an app directly from GitHub releases or F-Droid."""
-    need_android()
-    pkg = body.get("package", "").strip()
-    if not pkg or not re.fullmatch(r"[a-z0-9.]+", pkg):
-        raise ApiError(400, "Invalid package name.")
-    
-    # Map package names to installation methods (Obtainium-style)
-    app_sources = {
-        "app.smarttube": {
-            "name": "SmartTube",
-            "method": "github",
-            "repo": "yuliskov/SmartTube",
-            "apk_patterns": ["smarttube.*x86.*\\.apk", "smarttube.*\\.apk"],
-        },
-        "io.github.jqssun.helium": {
-            "name": "Titanium Browser",
-            "method": "note",
-            "message": "Titanium Browser x86_64 fork (zDProj) doesn't have pre-built releases.\nEither: 1) Use Lineage Jelly browser (included), or\n2) Build from source: https://github.com/zDProj/android-titanium-browser-x86_64",
-        },
-        "com.aurora.store": {
-            "name": "Aurora Store",
-            "method": "fdroid",
-        },
-    }
-    
-    if pkg not in app_sources:
-        raise ApiError(400, f"App not supported: {pkg}")
-    
-    app_info = app_sources[pkg]
-    method = app_info.get("method", "direct")
-    
-    if method == "fdroid":
-        # Use waytv-apps aurora which handles F-Droid
-        cmd = f"{BIN}/waytv-apps aurora"
-        job_name = f"Installing {app_info['name']} from F-Droid"
-    elif method == "direct":
-        # Direct download URL
-        url = app_info["url"]
-        cmd = f"{BIN}/waytv-apps install {url}"
-        job_name = f"Installing {app_info['name']}"
-    elif method == "github":
-        # Obtainium-style: fetch GitHub releases API, find best APK match
-        repo = app_info["repo"]
-        patterns = app_info.get("apk_patterns", [".*\\.apk"])
-        pattern_regex = patterns[0] if patterns else ".*\\.apk"
-        
-        # Check if GitHub token is available
-        github_token = ""
-        try:
-            with open("/etc/waytv/update.conf", "r") as f:
-                for line in f:
-                    if line.startswith("GITHUB_TOKEN="):
-                        github_token = line.split("=", 1)[1].strip()
-                        break
-        except:
-            pass
-        
-        # Build curl header with token if available
-        auth_header = f"-H 'Authorization: token {github_token}'" if github_token else ""
-        
-        # Bash script to fetch and find APK (Obtainium-style)
-        bash_script = f"""
-set -e
-REPO="{repo}"
-PATTERN="{pattern_regex}"
-AUTH_HEADER="{auth_header}"
-
-# Fetch latest 100 releases from GitHub API (with auth if available)
-RESPONSE=$(curl -s $AUTH_HEADER "https://api.github.com/repos/${{REPO}}/releases?per_page=100")
-
-# Parse JSON and find first APK matching pattern
-APK_URL=$(echo "${{RESPONSE}}" | python3 -c "
-import json, sys, re
-try:
-    data = json.load(sys.stdin)
-    if 'message' in data and 'rate limit' in data.get('message', '').lower():
-        print('GitHub API rate limit exceeded. Add GITHUB_TOKEN to /etc/waytv/update.conf', file=sys.stderr)
-        sys.exit(1)
-    if isinstance(data, list):
-        for release in data:
-            if release.get('draft'):
-                continue
-            for asset in release.get('assets', []):
-                name = asset.get('name', '')
-                if re.search(r'{pattern_regex}', name):
-                    url = asset.get('browser_download_url', '')
-                    if url:
-                        print(url)
-                        sys.exit(0)
-except Exception as e:
-    print(f'Error: {{e}}', file=sys.stderr)
-    pass
-sys.exit(1)
-")
-
-echo "${{APK_URL}}"
-"""
-        
-        cmd = f"bash -c {repr(bash_script)} | xargs -r {BIN}/waytv-apps install"
-        job_name = f"Installing {app_info['name']} from GitHub (Obtainium-style)"
-    else:
-        raise ApiError(400, f"Unknown installation method: {method}")
-    
-    job = start_job("install", job_name, cmd)
-    return {"ok": True, "restarting": False, "job": job}
-
-
-def update_app():
-    """Download and install the latest WayTV Settings app from GitHub."""
-    need_android()
-    latest = get_latest_app_version()
-    if not latest or not latest.get("url"):
-        raise ApiError(404, "Could not find latest app version on GitHub.")
-    
-    url = latest["url"]
-    apk_path = "/tmp/waytv-app-update.apk"
-    
-    # Download APK
-    rc, _ = run(["curl", "-s", "-L", "-o", apk_path, url], 60)
-    if rc != 0 or not os.path.exists(apk_path):
-        raise ApiError(500, "Failed to download app from GitHub.")
-    
-    # Install
-    job = start_job("app_update", f"Updating WayTV app to {latest['tag']}", 
-                   f"{BIN}/waytv-apps install {apk_path}")
-    return {"ok": True, "restarting": False, "job": job}
-
-
-def update_all_apps():
-    """Update all installed apps from /data/apps/."""
-    need_android()
-    apps = scan_apps()
-    if not apps:
-        raise ApiError(404, "No apps available to update.")
-    
-    # Create a job that updates all available apps
-    job = start_job("update_all", "Updating all apps", 
-                   f"{BIN}/waytv-apps update-all")
-    return {"ok": True, "restarting": False, "job": job}
 
 
 def timezones():
@@ -904,8 +661,7 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET":
                 if path == "/api/status":
                     return self.reply(200, status())
-                if path == "/api/apps":
-                    return self.reply(200, {"ok": True, "apps": scan_apps()})
+                    return self.reply(200, {"ok": True})
                 if path == "/api/timezones":
                     return self.reply(200, {"ok": True, "timezones": timezones()})
                 if path == "/api/jobs/last":
@@ -924,9 +680,6 @@ class Handler(BaseHTTPRequestHandler):
                     "/api/navbar": lambda: set_navbar(body),
                     "/api/overlay": lambda: set_overlay(body),
                     "/api/timezone": lambda: set_timezone(body),
-                    "/api/apps/install": lambda: install_app(body),
-                    "/api/apps/update-all": lambda: update_all_apps(),
-                    "/api/app/update": lambda: update_app(),
                     "/api/update/check": lambda: {"ok": True, "job": start_job(
                         "check", "Check for updates", f"{BIN}/waytv-check --no-notify")},
                     "/api/update/run": lambda: {"ok": True, "job": start_job(
