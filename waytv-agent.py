@@ -574,17 +574,16 @@ def install_app(body):
     
     # Map package names to installation methods (Obtainium-style)
     app_sources = {
-        "com.smarttube.tv": {
+        "app.smarttube": {
             "name": "SmartTube",
             "method": "github",
             "repo": "yuliskov/SmartTube",
-            "apk_patterns": ["smarttube.*\\.apk"],
+            "apk_patterns": ["smarttube.*x86.*\\.apk", "smarttube.*\\.apk"],
         },
         "io.github.jqssun.helium": {
             "name": "Titanium Browser",
-            "method": "github",
-            "repo": "zDProj/android-titanium-browser-x86_64",
-            "apk_patterns": [".*x86_64.*\\.apk", ".*release.*\\.apk"],
+            "method": "note",
+            "message": "Titanium Browser x86_64 fork (zDProj) doesn't have pre-built releases.\nEither: 1) Use Lineage Jelly browser (included), or\n2) Build from source: https://github.com/zDProj/android-titanium-browser-x86_64",
         },
         "com.aurora.store": {
             "name": "Aurora Store",
