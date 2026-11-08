@@ -180,55 +180,91 @@ EOM
         fi
     fi
 
-    # Aurora Store
-    [[ -n $AURORA_FLAG ]] && opt_set AURORA_STORE "$AURORA_FLAG"
-    if [[ -z "$(opt_get AURORA_STORE)" ]]; then
-        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
-            cat <<'EOM'
-
-Aurora Store: Open-source app store (Google Play without Google apps).
-Sign in anonymously. Many apps work fine without Play Services.
-EOM
-            local a; read -rp "Install Aurora Store? [Y/n] " a
-            case "$a" in
-                n|N|no|NO) opt_set AURORA_STORE no ;;
-                *)         opt_set AURORA_STORE yes ;;
-            esac
-            CHANGES+=("Aurora Store: $(opt_get AURORA_STORE)")
-        fi
-    fi
-
-    # F-Droid (open-source app repository)
-    if [[ -z "$(opt_get FDROID)" ]]; then
-        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
-            cat <<'EOM'
+    # If GApps: ask for F-Droid and SmartTube only (user will use Google Play Store for YouTube TV)
+    # If NO GApps: ask for Aurora Store, F-Droid, and SmartTube
+    if [[ "$(opt_get GAPPS)" == "yes" ]]; then
+        # GApps: F-Droid and SmartTube only
+        if [[ -z "$(opt_get FDROID)" ]]; then
+            if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+                cat <<'EOM'
 
 F-Droid: Repository of open-source Android apps.
 100% free software, no ads, no tracking. Great for privacy-focused users.
 EOM
-            local a; read -rp "Install F-Droid? [Y/n] " a
-            case "$a" in
-                n|N|no|NO) opt_set FDROID no ;;
-                *)         opt_set FDROID yes ;;
-            esac
-            CHANGES+=("F-Droid: $(opt_get FDROID)")
+                local a; read -rp "Install F-Droid? [Y/n] " a
+                case "$a" in
+                    n|N|no|NO) opt_set FDROID no ;;
+                    *)         opt_set FDROID yes ;;
+                esac
+                CHANGES+=("F-Droid: $(opt_get FDROID)")
+            fi
         fi
-    fi
 
-    # SmartTube
-    if [[ -z "$(opt_get SMARTTUBE)" ]]; then
-        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
-            cat <<'EOM'
+        if [[ -z "$(opt_get SMARTTUBE)" ]]; then
+            if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+                cat <<'EOM'
+
+SmartTube Next: Open-source YouTube client optimized for TV.
+Ad blocking, background playback, subscriptions (alternative to YouTube TV).
+EOM
+                local a; read -rp "Install SmartTube? [Y/n] " a
+                case "$a" in
+                    n|N|no|NO) opt_set SMARTTUBE no ;;
+                    *)         opt_set SMARTTUBE yes ;;
+                esac
+                CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+            fi
+        fi
+
+    else
+        # NO GApps: Aurora Store, F-Droid, and SmartTube
+        [[ -n $AURORA_FLAG ]] && opt_set AURORA_STORE "$AURORA_FLAG"
+        if [[ -z "$(opt_get AURORA_STORE)" ]]; then
+            if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+                cat <<'EOM'
+
+Aurora Store: Open-source app store (Google Play without Google apps).
+Sign in anonymously. Many apps work fine without Play Services.
+EOM
+                local a; read -rp "Install Aurora Store? [Y/n] " a
+                case "$a" in
+                    n|N|no|NO) opt_set AURORA_STORE no ;;
+                    *)         opt_set AURORA_STORE yes ;;
+                esac
+                CHANGES+=("Aurora Store: $(opt_get AURORA_STORE)")
+            fi
+        fi
+
+        if [[ -z "$(opt_get FDROID)" ]]; then
+            if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+                cat <<'EOM'
+
+F-Droid: Repository of open-source Android apps.
+100% free software, no ads, no tracking. Great for privacy-focused users.
+EOM
+                local a; read -rp "Install F-Droid? [Y/n] " a
+                case "$a" in
+                    n|N|no|NO) opt_set FDROID no ;;
+                    *)         opt_set FDROID yes ;;
+                esac
+                CHANGES+=("F-Droid: $(opt_get FDROID)")
+            fi
+        fi
+
+        if [[ -z "$(opt_get SMARTTUBE)" ]]; then
+            if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+                cat <<'EOM'
 
 SmartTube Next: Open-source YouTube client optimized for TV.
 Ad blocking, background playback, subscriptions.
 EOM
-            local a; read -rp "Install SmartTube? [Y/n] " a
-            case "$a" in
-                n|N|no|NO) opt_set SMARTTUBE no ;;
-                *)         opt_set SMARTTUBE yes ;;
-            esac
-            CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+                local a; read -rp "Install SmartTube? [Y/n] " a
+                case "$a" in
+                    n|N|no|NO) opt_set SMARTTUBE no ;;
+                    *)         opt_set SMARTTUBE yes ;;
+                esac
+                CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+            fi
         fi
     fi
 
