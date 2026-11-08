@@ -163,24 +163,109 @@ opt_set() {
 }
 
 ask_options() {
+    # GApps FIRST (defaults to no)
+    if [[ -z "$(opt_get GAPPS)" ]]; then
+        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+            cat <<'EOM'
+
+Google Play Services (GApps): Enables Google Play Store, Gmail, Maps, YouTube.
+Adds ~200 MB, sends data to Google. Most apps work without it.
+EOM
+            local a; read -rp "Install Google Play Services? [y/N] " a
+            case "$a" in
+                y|Y|yes|YES) opt_set GAPPS yes ;;
+                *)           opt_set GAPPS no ;;
+            esac
+            CHANGES+=("GApps: $(opt_get GAPPS)")
+        fi
+    fi
+
+    # Aurora Store
     [[ -n $AURORA_FLAG ]] && opt_set AURORA_STORE "$AURORA_FLAG"
     if [[ -z "$(opt_get AURORA_STORE)" ]]; then
         if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
             cat <<'EOM'
 
-Aurora Store is an open-source app store that downloads apps from Google Play
-without Google's own apps. You can sign in anonymously. Apps that need Google
-Play Services (some games, banking, Google apps) may not work.
+Aurora Store: Open-source app store (Google Play without Google apps).
+Sign in anonymously. Many apps work fine without Play Services.
 EOM
-            local a
-            read -rp "Install Aurora Store in Android? [Y/n] " a
+            local a; read -rp "Install Aurora Store? [Y/n] " a
             case "$a" in
                 n|N|no|NO) opt_set AURORA_STORE no ;;
                 *)         opt_set AURORA_STORE yes ;;
             esac
             CHANGES+=("Aurora Store: $(opt_get AURORA_STORE)")
-        else
-            echo "  Aurora Store: not asked (no keyboard on this run). Later: sudo waytv-apps aurora"
+        fi
+    fi
+
+    # F-Droid (open-source app repository)
+    if [[ -z "$(opt_get FDROID)" ]]; then
+        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+            cat <<'EOM'
+
+F-Droid: Repository of open-source Android apps.
+100% free software, no ads, no tracking. Great for privacy-focused users.
+EOM
+            local a; read -rp "Install F-Droid? [Y/n] " a
+            case "$a" in
+                n|N|no|NO) opt_set FDROID no ;;
+                *)         opt_set FDROID yes ;;
+            esac
+            CHANGES+=("F-Droid: $(opt_get FDROID)")
+        fi
+    fi
+
+    # SmartTube
+    if [[ -z "$(opt_get SMARTTUBE)" ]]; then
+        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+            cat <<'EOM'
+
+SmartTube Next: Open-source YouTube client optimized for TV.
+Ad blocking, background playback, subscriptions.
+EOM
+            local a; read -rp "Install SmartTube? [Y/n] " a
+            case "$a" in
+                n|N|no|NO) opt_set SMARTTUBE no ;;
+                *)         opt_set SMARTTUBE yes ;;
+            esac
+            CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+        fi
+    fi
+
+    # Launcher
+    if [[ -z "$(opt_get LAUNCHER)" ]]; then
+        if [[ -t 0 && $ASSUME_YES -eq 0 ]]; then
+            cat <<'EOM'
+
+Launcher: Choose home screen
+  1 = Default AOSP (basic, minimal)
+  2 = Projectify (modern, app drawer)
+  3 = Current (keep existing)
+EOM
+            local a; read -rp "Launcher choice [1/2/3] (default 1): " a
+            case "$a" in
+                2) opt_set LAUNCHER projectify ;;
+                3) opt_set LAUNCHER current ;;
+                *) opt_set LAUNCHER default ;;
+            esac
+            CHANGES+=("Launcher: $(opt_get LAUNCHER)")
+        fi
+    fi
+
+    # Low-resource mode
+    if [[ -z "$(opt_get LOW_RESOURCE_MODE)" ]]; then
+        if [[ -t 0 && $ASSUME_YES -eq 0 ]] && (( LOW_RESOURCES == 0 )); then
+            cat <<'EOM'
+
+Low-resource mode: Force optimizations even if hardware is sufficient.
+100% zram, 4 GB disk swap, high memory settings.
+EOM
+            local a; read -rp "Enable low-resource mode? [y/N] " a
+            case "$a" in
+                y|Y|yes|YES) opt_set LOW_RESOURCE_MODE yes ;;
+                *)           opt_set LOW_RESOURCE_MODE no ;;
+            esac
+            CHANGES+=("Low-resource mode: $(opt_get LOW_RESOURCE_MODE)")
         fi
     fi
 }
