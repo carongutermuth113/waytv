@@ -197,6 +197,8 @@ EOM
                     *)         opt_set FDROID yes ;;
                 esac
                 CHANGES+=("F-Droid: $(opt_get FDROID)")
+            else
+                opt_set FDROID yes  # Default to YES when no TTY
             fi
         fi
 
@@ -213,6 +215,8 @@ EOM
                     *)         opt_set SMARTTUBE yes ;;
                 esac
                 CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+            else
+                opt_set SMARTTUBE yes  # Default to YES when no TTY
             fi
         fi
 
@@ -232,6 +236,8 @@ EOM
                     *)         opt_set AURORA_STORE yes ;;
                 esac
                 CHANGES+=("Aurora Store: $(opt_get AURORA_STORE)")
+            else
+                opt_set AURORA_STORE yes  # Default to YES when no TTY
             fi
         fi
 
@@ -248,6 +254,8 @@ EOM
                     *)         opt_set FDROID yes ;;
                 esac
                 CHANGES+=("F-Droid: $(opt_get FDROID)")
+            else
+                opt_set FDROID yes  # Default to YES when no TTY
             fi
         fi
 
@@ -264,6 +272,8 @@ EOM
                     *)         opt_set SMARTTUBE yes ;;
                 esac
                 CHANGES+=("SmartTube: $(opt_get SMARTTUBE)")
+            else
+                opt_set SMARTTUBE yes  # Default to YES when no TTY
             fi
         fi
     fi
