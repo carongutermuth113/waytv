@@ -268,7 +268,7 @@ def uninstall_app():
 @app.route('/api/health', methods=['GET'])
 def health():
     """GET /api/health: Health check (no auth required)."""
-    return jsonify({'status': 'ok', 'version': '3.1.0'})
+    return jsonify({'status': 'ok', 'version': '1.0'})
 
 @app.route('/api/pair', methods=['POST'])
 def pair():
@@ -279,7 +279,7 @@ def pair():
     # Save pairing info (real impl would write PAIRING_FILE securely)
     pairing_info = {
         'token': device_token,
-        'agent_url': AGENT_URL,
+        'agent_url': AGENT_URL or "http://192.168.240.1:8765",
         'paired_at': subprocess.run(['date', '+%s'], capture_output=True, text=True).stdout.strip()
     }
     
@@ -290,6 +290,6 @@ def pair():
 
 if __name__ == '__main__':
     # Use a production server in real deployment (gunicorn, etc.)
-    print(f"Starting WayTV Agent v3.1.0 on 0.0.0.0:{AGENT_PORT}")
+    print(f"Starting WayTV Agent v1.0 on 0.0.0.0:{AGENT_PORT}")
     print(f"Token: {get_agent_token()}")
     app.run(host='0.0.0.0', port=AGENT_PORT, debug=False, threaded=True)

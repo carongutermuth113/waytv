@@ -48,7 +48,7 @@ WayTV v1.0 is a complete Waydroid-based Android TV kiosk system with:
 
 3. Update the setup script to reference your repo:
    ```bash
-   sed -i 's/YOUR_GITHUB_USERNAME/YOUR_ACTUAL_USERNAME/g' waytv-setup.sh
+   sed -i 's/carongutermuth113/YOUR_ACTUAL_USERNAME/g' waytv-setup.sh
    git add waytv-setup.sh
    git commit -m "Update GitHub repo reference to YOUR_USERNAME/waytv"
    git push

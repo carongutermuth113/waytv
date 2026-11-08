@@ -1,4 +1,4 @@
-# WayTV v21.0 — Complete Device Testing & Deployment
+# WayTV v1.0 — Complete Device Testing & Deployment
 
 ## 📋 Prerequisites
 
@@ -27,25 +27,25 @@ ls -lah /root/waytv-backup-v17.tgz
 
 ### Step 1.3: Backup current setup script
 ```bash
-sudo cp /home/hermes/cn60-waydroid-setup.sh /home/hermes/cn60-waydroid-setup.sh.v17.bak
+sudo cp /home/hermes/waytv-setup.sh /home/hermes/waytv-setup.sh.v17.bak
 echo "Backup complete: v17 script saved"
 ```
 
 ---
 
-## 🟡 PHASE 2: Deploy & Test Setup Script v21.0
+## 🟡 PHASE 2: Deploy & Test Setup Script v1.0
 
 ### Step 2.1: Copy new setup script to device (on your PC)
 ```bash
-scp ./cn60-waydroid-setup-v21.0.sh root@192.168.1.157:/root/
-ssh root@192.168.1.157 "chmod +x /root/cn60-waydroid-setup-v21.0.sh && ls -lah /root/cn60-waydroid-setup-v21.0.sh"
+scp ./waytv-setup.sh root@192.168.1.157:/root/
+ssh root@192.168.1.157 "chmod +x /root/waytv-setup.sh && ls -lah /root/waytv-setup.sh"
 ```
 
 **Expected output**: File listed with -rwxr-xr-x permissions
 
 ### Step 2.2: Syntax-check the script (no execution yet)
 ```bash
-ssh root@192.168.1.157 "bash -n /root/cn60-waydroid-setup-v21.0.sh && echo '✓ Syntax OK'"
+ssh root@192.168.1.157 "bash -n /root/waytv-setup.sh && echo '✓ Syntax OK'"
 ```
 
 **Expected output**: `✓ Syntax OK`
@@ -59,7 +59,7 @@ This will:
 
 **On device**:
 ```bash
-sudo /root/cn60-waydroid-setup-v21.0.sh --force
+sudo /root/waytv-setup.sh --force
 ```
 
 **When prompted**:
@@ -97,12 +97,12 @@ waydroid shell -- getprop ro.waydroid.launcher
 
 ---
 
-## 🟠 PHASE 3: Deploy & Test Agent v3.1.0
+## 🟠 PHASE 3: Deploy & Test Agent v1.0
 
 ### Step 3.1: Copy agent to device (on your PC)
 ```bash
-scp ./waytv_agent_v3.1.0.py root@192.168.1.157:/tmp/
-ssh root@192.168.1.157 "sudo cp /tmp/waytv_agent_v3.1.0.py /etc/waytv/agent.py && sudo chown root:root /etc/waytv/agent.py"
+scp ./waytv-agent.py root@192.168.1.157:/tmp/
+ssh root@192.168.1.157 "sudo cp /tmp/waytv-agent.py /etc/waytv/agent.py && sudo chown root:root /etc/waytv/agent.py"
 ```
 
 ### Step 3.2: Check agent syntax
@@ -200,7 +200,7 @@ export ANDROID_NDK_HOME=$HOME/Android/Sdk/ndk/25.1.8937393
 ### Step 4.2: Create Cargo project structure locally
 
 ```bash
-cd /home/hermes/waytv-v21-deploy
+cd /home/hermes/waytv-repo
 
 # Create Cargo.toml
 cat > Cargo.toml << 'EOF'
@@ -332,7 +332,7 @@ Run through this checklist and mark each item:
 - [ ] Both launchers installed and available
 - [ ] /etc/waytv/options has GAPPS and LAUNCHER set
 
-### Agent v3.1.0
+### Agent v1.0
 - [ ] Agent starts without errors
 - [ ] Health endpoint responds (no auth)
 - [ ] System info endpoint works (with auth)
@@ -369,7 +369,7 @@ Run through this checklist and mark each item:
 
 **Solution**: Run directly on device with keyboard, or use:
 ```bash
-ssh -t root@192.168.1.157 sudo /root/cn60-waydroid-setup-v21.0.sh --force
+ssh -t root@192.168.1.157 sudo /root/waytv-setup.sh --force
 ```
 
 The `-t` flag forces a pseudo-terminal.
@@ -467,8 +467,8 @@ waydroid pull /sdcard/screenshot.png ./screenshot.png
 Once all items in Phase 5 checklist are done:
 
 1. **Report results**: What passed, what failed, what needs tweaking
-2. **Push to git**: If everything works, commit v21.0 to repo
-3. **Document changes**: Update README with v21.0 changes
+2. **Push to git**: If everything works, commit v1.0 to repo
+3. **Document changes**: Update README with v1.0 changes
 
 ---
 
@@ -484,7 +484,7 @@ sudo systemctl stop waytv-agent
 sudo tar xzf /root/waytv-backup-v17.tgz -C /
 
 # Restore old script
-sudo cp /home/hermes/cn60-waydroid-setup.sh.v17.bak /home/hermes/cn60-waydroid-setup.sh
+sudo cp /home/hermes/waytv-setup.sh.v17.bak /home/hermes/waytv-setup.sh
 
 # Restart agent
 sudo systemctl start waytv-agent

@@ -1,23 +1,23 @@
-# WayTV v21.0 Quick Reference Card
+# WayTV v1.0 Quick Reference Card
 
 ## 📦 Files
 ```
-cn60-waydroid-setup-v21.0.sh  ← Setup script (copy & run)
+waytv-setup-v1.0.sh  ← Setup script (copy & run)
 waytv-settings-app.rs         ← Settings app source (build APK)
-waytv_agent_v3.1.0.py         ← Agent (copy to device)
+waytv-agent.py         ← Agent (copy to device)
 ```
 
 ## ⚡ TL;DR Device Testing
 
 ### On your PC:
 ```bash
-cd /home/hermes/waytv-v21-deploy
+cd /home/hermes/waytv-repo
 
 # 1. Copy setup script
-scp cn60-waydroid-setup-v21.0.sh root@192.168.1.157:/root/
+scp waytv-setup-v1.0.sh root@192.168.1.157:/root/
 
 # 2. Copy agent
-scp waytv_agent_v3.1.0.py root@192.168.1.157:/tmp/
+scp waytv-agent.py root@192.168.1.157:/tmp/
 
 # 3. Build settings app (requires cargo ndk)
 cargo ndk -t aarch64-linux-android build --release
@@ -32,10 +32,10 @@ scp target/aarch64-linux-android/release/waytv_settings.apk root@192.168.1.157:/
 sudo tar czf /root/waytv-backup-v17.tgz /etc/waytv /opt/waytv
 
 # Run setup (will download ~1.5 GB, ask GApps + launcher, reboot)
-sudo /root/cn60-waydroid-setup-v21.0.sh --force
+sudo /root/waytv-setup-v1.0.sh --force
 
 # After reboot, deploy agent
-sudo cp /tmp/waytv_agent_v3.1.0.py /etc/waytv/agent.py
+sudo cp /tmp/waytv-agent.py /etc/waytv/agent.py
 sudo systemctl restart waytv-agent
 
 # Install settings app
@@ -59,7 +59,7 @@ curl http://192.168.240.1:8765/api/health
 | Phase | What | Expected | Check |
 |-------|------|----------|-------|
 | 1 | Backup | Creates /root/waytv-backup-v17.tgz | `ls -lah /root/*.tgz` |
-| 2 | Setup script syntax | No errors | `bash -n /root/cn60-waydroid-setup-v21.0.sh` |
+| 2 | Setup script syntax | No errors | `bash -n /root/waytv-setup-v1.0.sh` |
 | 2 | Setup runs | Asks GApps, launcher, downloads, reboots | Follow prompts |
 | 2 | Options saved | /etc/waytv/options has GAPPS and LAUNCHER | `cat /etc/waytv/options` |
 | 3 | Agent syntax | No errors | `python3 -m py_compile /etc/waytv/agent.py` |
@@ -99,8 +99,8 @@ If Phase 2 setup script fails:
 
 ```bash
 # On device
-sudo cp /home/hermes/cn60-waydroid-setup.sh.v17.bak /home/hermes/cn60-waydroid-setup.sh
-sudo /home/hermes/cn60-waydroid-setup.sh --force
+sudo cp /home/hermes/waytv-setup.sh.v17.bak /home/hermes/waytv-setup.sh
+sudo /home/hermes/waytv-setup.sh --force
 ```
 
 If Phase 3 agent fails:
